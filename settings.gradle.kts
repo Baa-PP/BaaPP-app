@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 rootProject.name = "BaaPP"
 include(":shared")
 include(":androidApp")
-include(":backend")
