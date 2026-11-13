@@ -1,0 +1,21 @@
+# Gradle & Kotlin
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+out/
+kotlin-js-store/
+
+# Android & IDE
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Environment & Secrets
+.env
+*.jks
+*.keystore
+application-local.yml

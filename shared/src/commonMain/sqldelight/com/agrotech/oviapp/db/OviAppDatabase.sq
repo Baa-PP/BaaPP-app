@@ -1,0 +1,38 @@
+CREATE TABLE local_animals (
+    id TEXT NOT NULL PRIMARY KEY,
+    ranch_id TEXT NOT NULL,
+    folio_interno TEXT NOT NULL,
+    siniiga_chip TEXT,
+    registro_uno TEXT,
+    breed TEXT NOT NULL,
+    color TEXT NOT NULL,
+    sex TEXT NOT NULL,
+    birth_date TEXT NOT NULL,
+    weaning_date TEXT,
+    sire_id TEXT,
+    dam_id TEXT,
+    life_stage TEXT NOT NULL,
+    reproductive_status TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    UNIQUE (ranch_id, folio_interno)
+);
+
+CREATE TABLE pending_sync_events (
+    mutation_id TEXT NOT NULL PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    local_photo_path TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'PENDING'
+);
+
+selectPendingSyncEvents:
+SELECT * FROM pending_sync_events
+WHERE sync_status = 'PENDING'
+ORDER BY occurred_at ASC;
+
+markSyncEventCompleted:
+UPDATE pending_sync_events
+SET sync_status = 'SYNCED'
+WHERE mutation_id = ?;

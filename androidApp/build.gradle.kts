@@ -1,0 +1,27 @@
+plugins {
+    alias(libs.plugins.androidApplication)
+    alias(libs.plugins.kotlinAndroid)
+    alias(libs.plugins.composeCompiler)
+}
+
+android {
+    namespace = "com.agrotech.oviapp.android"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "com.agrotech.oviapp.android"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "0.1.0"
+    }
+    buildFeatures {
+        compose = true
+    }
+}
+
+dependencies {
+    implementation(project(":shared"))
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.compose.material3:material3:1.3.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+}
