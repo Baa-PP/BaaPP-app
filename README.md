@@ -90,6 +90,29 @@ BaaPP-app/
 
 ---
 
+## Ejecución Local (Desarrollo)
+
+### 1. Requisitos Previos
+* **Android Studio** (Ladybug 2024.2.1 o superior) con el plugin **Kotlin Multiplatform**.
+* **JDK 17 o 21** y **Android SDK 35** (API 26 mínimo).
+
+### 2. Ejecutar la App Android
+1. Abre la carpeta `BaaPP-app` en **Android Studio** y deja que finalice el **Gradle Sync** (esto compilará automáticamente el esquema offline [`OviAppDatabase.sq`](shared/src/commonMain/sqldelight/com/agrotech/oviapp/db/OviAppDatabase.sq) con **SQLDelight**).
+2. En la barra superior, selecciona la configuración **`androidApp`** y elige un Emulador Android o un dispositivo físico conectado por USB.
+3. Presiona **Run (`Shift + F10`)**, o desde la terminal integrada (ejecuta `gradle wrapper` la primera vez si aún no generas `gradlew`):
+   ```bash
+   # Generar interfaces SQLDelight y compilar el módulo compartido KMP
+   ./gradlew :shared:assembleDebug
+
+   # Instalar la app en el emulador o teléfono conectado
+   ./gradlew :androidApp:installDebug
+   ```
+4. **Conexión con [`BaaPP-backend`](https://github.com/Baa-PP/BaaPP-backend) local:**
+   * En el **Emulador de Android**, usa `http://10.0.2.2:5000/api/v1` para apuntar al `localhost:5000` de tu computadora.
+   * En un **teléfono físico**, usa la IP local Wi-Fi de tu computadora (ej. `http://192.168.1.XX:5000/api/v1`).
+
+---
+
 ## Hoja de Ruta (Roadmap)
 
 ### Fase 1 — MVP de Fin de Semestre (Prioridad Core)
