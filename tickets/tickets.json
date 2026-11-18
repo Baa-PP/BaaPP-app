@@ -1,0 +1,303 @@
+{
+  "project": "BaaPP-app",
+  "source": "tickets/REQUERIMIENTOS_ANDROID_APP.pdf",
+  "milestone": "MVP 4-6 dic 2026",
+  "tickets": [
+    {
+      "id": "APP-01", "req": "RNF Mantenibilidad", "phase": 1, "type": "tech", "priority": "high", "depends_on": [],
+      "title": "Esquema SQLDelight ampliado y tablas espejo",
+      "description": "Completar local_animals (adn, parturition_type, conception_method, external_sire_folio, external_dam_folio, entry_reason, criador_name, photo_s3_key, birth_event_id, mortality_date, mortality_cause, updated_at). Agregar local_birth_events y local_weight_measurements. Indices para listas de 1,000+ animales. UNIQUE (ranch_id, folio_interno).",
+      "acceptance_criteria": [
+        "Migraciones .sqm versionadas, sin editar las ya publicadas",
+        "Tablas espejo consultables offline",
+        "Consultas indexadas y paginadas"
+      ]
+    },
+    {
+      "id": "APP-02", "req": "RF-AND-01", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-01"],
+      "title": "Login JWT y sesion cifrada offline",
+      "description": "Login usuario/contrasena contra /api/v1/auth/login. Guardar JWT, ranch_id, rol y permisos de Cuenta Rama cifrados en el dispositivo (Keystore).",
+      "acceptance_criteria": [
+        "Tras el primer login se puede abrir la app y capturar sin internet",
+        "Nada en texto plano en prefs ni logs",
+        "Solo HTTPS"
+      ]
+    },
+    {
+      "id": "APP-03", "req": "RF-AND-01", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-02"],
+      "title": "Refresco automatico de token en Ktor",
+      "description": "Interceptor Ktor que usa /api/v1/auth/refresh al recuperar red. Cerrar sesion solo si el refresh expira o es revocado por el servidor.",
+      "acceptance_criteria": [
+        "Un 401 con refresh valido reintenta la peticion sin que el usuario lo note",
+        "Refresh invalido o revocado cierra la sesion"
+      ]
+    },
+    {
+      "id": "APP-04", "req": "Seccion 3 Roles", "phase": 1, "type": "feature", "priority": "medium", "depends_on": ["APP-02"],
+      "title": "Control de acceso por rol y permisos granulares en UI",
+      "description": "OWNER, WORKER_BRANCH (permisos JSONB: lectura, captura, edicion, exportacion), VET_TECHNICIAN y ASSOCIATION_SUPERUSER. La app oculta o deshabilita acciones segun rol. La validacion real sigue en el servidor.",
+      "acceptance_criteria": [
+        "Un trabajador sin permiso de captura no ve acciones de alta",
+        "OWNER y WORKER_BRANCH no editan nacimientos guardados"
+      ]
+    },
+    {
+      "id": "APP-05", "req": "RF-AND-02", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-01"],
+      "title": "Modelo de dominio de Animal y catalogos",
+      "description": "Dimensiones ortogonales en :shared: sex, lifeStage, reproductiveStatus, status. Identificadores id UUIDv7, folio_interno, chip_siniiga (10-15 digitos, prefijo 484), registro_uno, adn. Catalogo de razas, entry_reason, tipo de parto y metodo de concepcion. Sin campos excluidos (prefijo, letra, calificacion, familia, lana/leche).",
+      "acceptance_criteria": [
+        "Validacion SINIIGA con tests",
+        "UUIDv7 generado en el cliente",
+        "Calculo de edad en meses y dias con tests"
+      ]
+    },
+    {
+      "id": "APP-06", "req": "RF-AND-02", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-05"],
+      "title": "Inventario en 3 pestanas (Hembras, Sementales, Crias)",
+      "description": "Lista con LazyColumn y filtro por folio/arete y estado reproductivo (EMPTY, PREGNANT, LACTATING). Sementales muestra circunferencia testicular y crias engendradas. Crias: LAMB_LACTATING, LAMB_FATTENING, EWE_REPLACEMENT.",
+      "acceptance_criteria": [
+        "Se usa el termino Sementales, no Padres",
+        "Scroll fluido con 1,000+ animales",
+        "Los DECEASED no aparecen en las listas operativas"
+      ]
+    },
+    {
+      "id": "APP-07", "req": "RF-AND-02", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-05"],
+      "title": "Alta y edicion de animal (Resena limpia)",
+      "description": "Formulario offline de alta con identificacion, raza, color, motivo de ingreso, criador vs propietario, fechas, genealogia, tipo de parto, metodo de concepcion y foto. folio_interno editable sin romper relaciones.",
+      "acceptance_criteria": [
+        "Alta en modo avion sin perdida de datos",
+        "Folio duplicado en el rancho rechazado",
+        "Foto comprimida a ~150-200 KB"
+      ]
+    },
+    {
+      "id": "APP-08", "req": "RF-AND-02", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-06"],
+      "title": "Ficha individual con distincion visual por sexo",
+      "description": "Encabezado rosa (hembra) o azul (macho) siempre con texto e icono. Edad dinamica, fecha de destete y fotografia.",
+      "acceptance_criteria": [
+        "El color nunca es el unico indicador",
+        "Alto contraste legible bajo el sol"
+      ]
+    },
+    {
+      "id": "APP-09", "req": "RF-AND-03", "phase": 1, "type": "feature", "priority": "medium", "depends_on": ["APP-07"],
+      "title": "Selectores de progenitores filtrados",
+      "description": "Selector de Madre filtra hembras del rancho; selector de Padre filtra machos/sementales. Texto libre para folio_padre_externo y folio_madre_externo.",
+      "acceptance_criteria": [
+        "El selector de madre solo lista hembras del rancho",
+        "El selector de padre solo lista machos del rancho",
+        "Se acepta progenitor externo por texto"
+      ]
+    },
+    {
+      "id": "APP-10", "req": "RF-AND-03", "phase": 1, "type": "feature", "priority": "medium", "depends_on": ["APP-08"],
+      "title": "Navegacion genealogica bidireccional",
+      "description": "Tocar al padre o a la madre abre su ficha. Desde madre o semental se lista la descendencia (viva y fallecida con su estatus) navegable con un toque.",
+      "acceptance_criteria": [
+        "Madre, cria y semental navegables en ambos sentidos",
+        "Las crias fallecidas aparecen con su estatus"
+      ]
+    },
+    {
+      "id": "APP-11", "req": "RF-AND-04", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-05"],
+      "title": "Politica anti-fraude de 30 dias (BirthAntiFraudPolicy)",
+      "description": "Regla de dominio 0 <= hoy - fecha_parto <= 30 dias, validada localmente y tambien sin conexion. Mensaje: Ventana de 30 dias cerrada. Solicite el alta auditada a la Asociacion/Tecnico con su evidencia fotografica.",
+      "acceptance_criteria": [
+        "Tests en los limites: dia 0, dia 30, dia 31 y fecha futura",
+        "OWNER y WORKER_BRANCH bloqueados con mas de 30 dias, sin conexion incluida"
+      ]
+    },
+    {
+      "id": "APP-12", "req": "RF-AND-04", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-11", "APP-09", "APP-14"],
+      "title": "Captura de evento de parto con foto obligatoria",
+      "description": "Madre, padre opcional, concepcion MN/IA/TE, fecha, nacidos vivos y muertos (deduce SIMPLE a QUINTUPLET). Datos por cria viva: folio, sexo, color, peso al nacer. Fichas ligadas por birth_event_id. Al menos una foto comprimida a ~150-200 KB.",
+      "acceptance_criteria": [
+        "No se puede guardar sin foto",
+        "Se crean las fichas de las crias vinculadas",
+        "Funciona en modo avion"
+      ]
+    },
+    {
+      "id": "APP-13", "req": "RF-AND-04", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-12"],
+      "title": "Inmutabilidad de nacimientos guardados",
+      "description": "Ni OWNER ni WORKER_BRANCH editan cantidades ni eliminan el evento. La pantalla indica reportar el error con foto a la Asociacion/Tecnico.",
+      "acceptance_criteria": [
+        "No hay acciones de editar ni borrar sobre un parto guardado",
+        "Se muestra la indicacion de correccion auditada"
+      ]
+    },
+    {
+      "id": "APP-14", "req": "RF-AND-04 / RNF", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-01"],
+      "title": "Captura y compresion local de fotografias",
+      "description": "Camara, compresion WebP/JPEG a ~150-200 KB, guardado en local_photo_path para la cola de subida. Carga con Coil.",
+      "acceptance_criteria": [
+        "Fotos finales entre 150 y 200 KB",
+        "La foto persiste hasta que se sube a S3"
+      ]
+    },
+    {
+      "id": "APP-15", "req": "RF-AND-05", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-05"],
+      "title": "Pesajes, circunferencia escrotal y GDP",
+      "description": "Hitos BIRTH, WEANING, DAY_120, DAY_150 y EVALUATION. circunferencia_escrotal_cm solo para MALE. Calculo local de edad en dias y GDP contra el pesaje anterior (g/dia o kg/dia) desde SQLite.",
+      "acceptance_criteria": [
+        "GDP correcto con tests unitarios",
+        "Circunferencia solo disponible para machos",
+        "Calculo sin conexion"
+      ]
+    },
+    {
+      "id": "APP-16", "req": "RF-AND-06", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-05"],
+      "title": "Fecha programada de destete y lista de destetes pendientes",
+      "description": "fecha_nacimiento + dias_meta_destete (75 por defecto) visible en la cria. Vista local de Destetes Pendientes/Proximos calculada offline desde local_animals.",
+      "acceptance_criteria": [
+        "Un cordero con 75 dias aparece en pendientes",
+        "Funciona sin conexion"
+      ]
+    },
+    {
+      "id": "APP-17", "req": "RF-AND-06", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-03"],
+      "title": "Notificaciones push FCM de destete",
+      "description": "Integrar Firebase Cloud Messaging para recibir las alertas de WeaningAlertScheduler del backend. Registro del token del dispositivo.",
+      "acceptance_criteria": [
+        "La push de destete se recibe en el telefono",
+        "Tocarla abre el destete pendiente"
+      ]
+    },
+    {
+      "id": "APP-18", "req": "RF-AND-06", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-15", "APP-16"],
+      "title": "Flujo Confirmar Destete",
+      "description": "Registrar fecha_destete y peso WEANING por cria. Destino: Engorda (LAMB_FATTENING), Recria/Reemplazo (EWE_REPLACEMENT) o Venta (SOLD). La madre pasa de LACTATING a EMPTY y el evento se encola para sincronizar.",
+      "acceptance_criteria": [
+        "La madre pasa a EMPTY al confirmar",
+        "Se guarda el peso al destete",
+        "El evento queda en pending_sync_events"
+      ]
+    },
+    {
+      "id": "APP-19", "req": "RF-AND-07", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-08"],
+      "title": "Bajas por mortalidad o venta sin borrado fisico",
+      "description": "Mortalidad: status DECEASED con fecha_muerte, causa_muerte y etapa_al_morir. Venta: status SOLD. Nunca DELETE. El fallecido sigue visible en el historial de partos de su madre y en el resumen de mortalidad.",
+      "acceptance_criteria": [
+        "No existe ninguna ruta de borrado de animales",
+        "Los fallecidos salen de las listas operativas pero siguen en el historial de la madre"
+      ]
+    },
+    {
+      "id": "APP-20", "req": "RF-AND-08", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-01"],
+      "title": "Cola de salida pending_sync_events",
+      "description": "Toda escritura va primero a SQLite y encola una fila con mutation_id UUIDv7, entity_type, operation, occurred_at, payload_json, local_photo_path y sync_status PENDING.",
+      "acceptance_criteria": [
+        "Escritura de datos y encolado en una sola transaccion",
+        "Las mutaciones se envian en orden"
+      ]
+    },
+    {
+      "id": "APP-21", "req": "RF-AND-08", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-20", "APP-03"],
+      "title": "OfflineSyncEngine con WorkManager y sync por lotes",
+      "description": "WorkManager con NetworkType.CONNECTED, reintentos exponenciales y boton Sincronizar ahora. Envia el lote ordenado a POST /api/v1/sync/batch (idempotente por mutation_id).",
+      "acceptance_criteria": [
+        "Reconectar dispara el sync automaticamente",
+        "Reintentar no duplica registros",
+        "Backoff exponencial ante fallos"
+      ]
+    },
+    {
+      "id": "APP-22", "req": "RF-AND-08", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-21", "APP-14"],
+      "title": "Subida de fotos a S3 con URL pre-firmada",
+      "description": "Para mutaciones con local_photo_path, pedir POST /api/v1/media/presigned-upload, subir con PUT a S3 y adjuntar el s3Key al payload. Sin secretos AWS en la app.",
+      "acceptance_criteria": [
+        "La foto sube antes de enviar el lote",
+        "El s3Key queda en el payload",
+        "No hay credenciales AWS en el codigo"
+      ]
+    },
+    {
+      "id": "APP-23", "req": "RF-AND-08", "phase": 1, "type": "feature", "priority": "high", "depends_on": ["APP-21"],
+      "title": "Pull incremental por updated_at",
+      "description": "Traer cambios del servidor (dueno, encargado, correcciones aprobadas por la Asociacion) con GET /api/v1/animals?updated_after y mezclarlos en SQLite.",
+      "acceptance_criteria": [
+        "Los cambios de la webapp aparecen en el telefono",
+        "No se pisan mutaciones locales pendientes"
+      ]
+    },
+    {
+      "id": "APP-24", "req": "RF-AND-08", "phase": 1, "type": "feature", "priority": "medium", "depends_on": ["APP-20"],
+      "title": "Indicador permanente de estado de sincronizacion",
+      "description": "Barra superior: En linea - Todo sincronizado, o Sin senal - N cambios guardados en telefono.",
+      "acceptance_criteria": [
+        "El contador refleja las mutaciones PENDING",
+        "Cambia al perder o recuperar red"
+      ]
+    },
+    {
+      "id": "APP-25", "req": "RF-AND-09", "phase": 1, "type": "feature", "priority": "medium", "depends_on": ["APP-06", "APP-16", "APP-19"],
+      "title": "Resumen del rancho en pantalla principal",
+      "description": "Tarjetas calculadas desde la BD local: animales activos, hembras (gestantes/lactando/vacias), sementales, crias en lactancia/engorda, destetes pendientes y mortalidad del mes.",
+      "acceptance_criteria": [
+        "Los conteos coinciden con el inventario",
+        "Funciona sin conexion"
+      ]
+    },
+    {
+      "id": "APP-26", "req": "RNF UX", "phase": 1, "type": "quality", "priority": "high", "depends_on": [],
+      "title": "Tema y lineamientos UX de campo",
+      "description": "Objetivos tactiles >= 56dp, alto contraste exterior, rosa/azul con texto e icono, lenguaje del ganadero (Arete, Semental, Vientre, Destete).",
+      "acceptance_criteria": [
+        "Todos los botones primarios de captura >= 56dp",
+        "Revision de contraste y de textos"
+      ]
+    },
+    {
+      "id": "APP-27", "req": "Seccion 7.2", "phase": 1, "type": "test", "priority": "high", "depends_on": ["APP-13", "APP-18", "APP-22"],
+      "title": "Verificacion de criterios de aceptacion MVP",
+      "description": "Prueba de punta a punta: (1) nacimiento con foto y pesaje en modo avion que sincroniza sin duplicados y aparece en webapp y PostgreSQL; (2) anti-fraude de 30 dias offline; (3) destete a 75 dias con push, peso y madre a EMPTY; (4) botones >= 56dp con rosa/azul y texto.",
+      "acceptance_criteria": [
+        "Los 4 criterios de la seccion 7.2 pasan en un dispositivo real",
+        "Demo lista para el 4-6 dic 2026"
+      ]
+    },
+    {
+      "id": "APP-F2-01", "req": "RF-AND-F2-01", "phase": 2, "type": "feature", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Empadres y diagnostico de gestacion",
+      "description": "Captura de empadre (hembra, semental o externo, MN/IA/TE, fecha) y diagnostico PREGNANT/EMPTY desde 30 dias despues, con fecha probable de parto (+150 dias).",
+      "acceptance_criteria": ["El diagnostico solo se permite tras 30 dias", "Se muestra la fecha probable de parto"]
+    },
+    {
+      "id": "APP-F2-02", "req": "RF-AND-F2-02", "phase": 2, "type": "feature", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Corrales y cuarentena/enfermeria",
+      "description": "Asignar o mover animales y lotes entre corrales; enviar a Cuarentena con estado En tratamiento, diagnostico y medicacion.",
+      "acceptance_criteria": ["Movimiento individual y por lote", "Estado En tratamiento visible"]
+    },
+    {
+      "id": "APP-F2-03", "req": "RF-AND-F2-03", "phase": 2, "type": "feature", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Cartilla sanitaria de 4 rubros",
+      "description": "Vacunacion, Vitaminacion, Selenio y Desparasitacion, individual o por lote (HERD, LAMBS, INDIVIDUAL), con producto, dosis en ml, proxima fecha y tiempo de retiro. Offline y online.",
+      "acceptance_criteria": ["Los 4 rubros se registran sin conexion", "Soporta los 3 alcances de lote"]
+    },
+    {
+      "id": "APP-F2-04", "req": "RF-AND-F2-04", "phase": 2, "type": "feature", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Consulta de dietas y alerta por cambio de etapa",
+      "description": "Vista de solo lectura de la racion por etapa (Lactancia, Crecimiento, Desarrollo, Engorda, Mantenimiento) y notificacion cuando una madre cambia de formula al confirmar destete.",
+      "acceptance_criteria": ["Solo lectura", "Notificacion al cambiar de etapa"]
+    },
+    {
+      "id": "APP-F2-05", "req": "RF-AND-F2-05", "phase": 2, "type": "feature", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Gastos y ventas en campo",
+      "description": "Captura rapida de movimientos INCOME/EXPENSE (ventas en pie, compra de insumos) que se sincronizan al tablero financiero de la webapp.",
+      "acceptance_criteria": ["Captura offline", "Se sincroniza a la webapp"]
+    },
+    {
+      "id": "APP-F2-06", "req": "RF-AND-F2-06", "phase": 2, "type": "feature", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Campeonatos y exposiciones",
+      "description": "Consulta de premios en la ficha del animal y captura de la fotografia oficial en Expo Ganadera.",
+      "acceptance_criteria": ["Los premios se ven en la ficha", "La foto se sube por la cola de sync"]
+    },
+    {
+      "id": "APP-F2-07", "req": "RF-AND-F2-07", "phase": 2, "type": "tech", "priority": "low", "depends_on": ["APP-27"],
+      "title": "Expansion iOS (iosApp)",
+      "description": "Compilar :iosApp en SwiftUI + BGTaskScheduler consumiendo el 100% del codigo de :shared.",
+      "acceptance_criteria": ["La app iOS usa :shared sin duplicar logica", "El sync en segundo plano funciona con BGTaskScheduler"]
+    }
+  ]
+}
