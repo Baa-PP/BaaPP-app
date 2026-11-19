@@ -153,34 +153,37 @@ INSERT INTO local_animals (
     ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?
-)
-ON CONFLICT(id) DO UPDATE SET
-    ranch_id = excluded.ranch_id,
-    folio_interno = excluded.folio_interno,
-    siniiga_chip = excluded.siniiga_chip,
-    registro_uno = excluded.registro_uno,
-    adn = excluded.adn,
-    breed = excluded.breed,
-    color = excluded.color,
-    sex = excluded.sex,
-    birth_date = excluded.birth_date,
-    weaning_date = excluded.weaning_date,
-    parturition_type = excluded.parturition_type,
-    conception_method = excluded.conception_method,
-    sire_id = excluded.sire_id,
-    dam_id = excluded.dam_id,
-    external_sire_folio = excluded.external_sire_folio,
-    external_dam_folio = excluded.external_dam_folio,
-    entry_reason = excluded.entry_reason,
-    criador_name = excluded.criador_name,
-    photo_s3_key = excluded.photo_s3_key,
-    birth_event_id = excluded.birth_event_id,
-    mortality_date = excluded.mortality_date,
-    mortality_cause = excluded.mortality_cause,
-    life_stage = excluded.life_stage,
-    reproductive_status = excluded.reproductive_status,
-    status = excluded.status,
-    updated_at = excluded.updated_at;
+);
+
+updateAnimal:
+UPDATE local_animals
+SET ranch_id = ?,
+    folio_interno = ?,
+    siniiga_chip = ?,
+    registro_uno = ?,
+    adn = ?,
+    breed = ?,
+    color = ?,
+    sex = ?,
+    birth_date = ?,
+    weaning_date = ?,
+    parturition_type = ?,
+    conception_method = ?,
+    sire_id = ?,
+    dam_id = ?,
+    external_sire_folio = ?,
+    external_dam_folio = ?,
+    entry_reason = ?,
+    criador_name = ?,
+    photo_s3_key = ?,
+    birth_event_id = ?,
+    mortality_date = ?,
+    mortality_cause = ?,
+    life_stage = ?,
+    reproductive_status = ?,
+    status = ?,
+    updated_at = ?
+WHERE id = ?;
 
 updateAnimalStatus:
 UPDATE local_animals
