@@ -4,17 +4,60 @@ CREATE TABLE local_animals (
     folio_interno TEXT NOT NULL,
     siniiga_chip TEXT,
     registro_uno TEXT,
+    adn TEXT,
     breed TEXT NOT NULL,
     color TEXT NOT NULL,
     sex TEXT NOT NULL,
     birth_date TEXT NOT NULL,
     weaning_date TEXT,
+    parturition_type TEXT NOT NULL DEFAULT 'SIMPLE',
+    conception_method TEXT NOT NULL DEFAULT 'MN',
     sire_id TEXT,
     dam_id TEXT,
+    external_sire_folio TEXT,
+    external_dam_folio TEXT,
+    entry_reason TEXT NOT NULL DEFAULT 'BIRTH',
+    criador_name TEXT,
+    photo_s3_key TEXT,
+    birth_event_id TEXT,
+    mortality_date TEXT,
+    mortality_cause TEXT,
     life_stage TEXT NOT NULL,
     reproductive_status TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (ranch_id, folio_interno)
+);
+
+CREATE TABLE local_birth_events (
+    id TEXT NOT NULL PRIMARY KEY,
+    ranch_id TEXT NOT NULL,
+    dam_id TEXT NOT NULL,
+    sire_id TEXT,
+    birth_date TEXT NOT NULL,
+    live_births INTEGER NOT NULL DEFAULT 0,
+    stillborns INTEGER NOT NULL DEFAULT 0,
+    parturition_type TEXT NOT NULL DEFAULT 'SIMPLE',
+    conception_method TEXT NOT NULL DEFAULT 'MN',
+    photo_s3_key TEXT,
+    local_photo_path TEXT,
+    registered_by_user_id TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE local_weight_measurements (
+    id TEXT NOT NULL PRIMARY KEY,
+    ranch_id TEXT NOT NULL,
+    animal_id TEXT NOT NULL,
+    milestone TEXT NOT NULL,
+    weight_kg REAL NOT NULL,
+    scrotal_circumference_cm REAL,
+    measurement_date TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE pending_sync_events (
@@ -27,6 +70,23 @@ CREATE TABLE pending_sync_events (
     sync_status TEXT NOT NULL DEFAULT 'PENDING'
 );
 
+-- Performance Indexes
+CREATE INDEX idx_local_animals_ranch_status ON local_animals (ranch_id, status);
+CREATE INDEX idx_local_animals_ranch_sex_stage ON local_animals (ranch_id, sex, life_stage);
+CREATE INDEX idx_local_animals_ranch_folio ON local_animals (ranch_id, folio_interno);
+CREATE INDEX idx_local_animals_ranch_chip ON local_animals (ranch_id, siniiga_chip);
+CREATE INDEX idx_local_animals_dam ON local_animals (dam_id);
+CREATE INDEX idx_local_animals_sire ON local_animals (sire_id);
+CREATE INDEX idx_local_animals_birth_event ON local_animals (birth_event_id);
+CREATE INDEX idx_local_animals_weaning_pending ON local_animals (birth_date, status, weaning_date);
+
+CREATE INDEX idx_local_birth_events_ranch_date ON local_birth_events (ranch_id, birth_date DESC);
+CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
+
+CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
+CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
+
+-- Queries: sync
 selectPendingSyncEvents:
 SELECT * FROM pending_sync_events
 WHERE sync_status = 'PENDING'
@@ -36,3 +96,149 @@ markSyncEventCompleted:
 UPDATE pending_sync_events
 SET sync_status = 'SYNCED'
 WHERE mutation_id = ?;
+
+-- Queries: local_animals (paginated & indexed)
+selectAnimalsByRanchPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'ACTIVE'
+ORDER BY folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
+selectAnimalsBySexPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND sex = :sex AND status = 'ACTIVE'
+ORDER BY folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
+selectLambsPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'ACTIVE' AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+ORDER BY birth_date DESC
+LIMIT :limit OFFSET :offset;
+
+searchAnimalsPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'ACTIVE' AND (
+    folio_interno LIKE ('%' || :query || '%') OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+)
+ORDER BY folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
+selectAnimalById:
+SELECT * FROM local_animals
+WHERE id = :id;
+
+selectAnimalByFolio:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND folio_interno = :folioInterno;
+
+selectOffspringByParent:
+SELECT * FROM local_animals
+WHERE dam_id = :parentId OR sire_id = :parentId
+ORDER BY birth_date DESC;
+
+insertAnimal:
+INSERT INTO local_animals (
+    id, ranch_id, folio_interno, siniiga_chip, registro_uno, adn,
+    breed, color, sex, birth_date, weaning_date,
+    parturition_type, conception_method, sire_id, dam_id,
+    external_sire_folio, external_dam_folio, entry_reason, criador_name,
+    photo_s3_key, birth_event_id, mortality_date, mortality_cause,
+    life_stage, reproductive_status, status, updated_at
+) VALUES (
+    ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?
+);
+
+updateAnimal:
+UPDATE local_animals
+SET ranch_id = ?,
+    folio_interno = ?,
+    siniiga_chip = ?,
+    registro_uno = ?,
+    adn = ?,
+    breed = ?,
+    color = ?,
+    sex = ?,
+    birth_date = ?,
+    weaning_date = ?,
+    parturition_type = ?,
+    conception_method = ?,
+    sire_id = ?,
+    dam_id = ?,
+    external_sire_folio = ?,
+    external_dam_folio = ?,
+    entry_reason = ?,
+    criador_name = ?,
+    photo_s3_key = ?,
+    birth_event_id = ?,
+    mortality_date = ?,
+    mortality_cause = ?,
+    life_stage = ?,
+    reproductive_status = ?,
+    status = ?,
+    updated_at = ?
+WHERE id = ?;
+
+updateAnimalStatus:
+UPDATE local_animals
+SET status = :status, mortality_date = :mortalityDate, mortality_cause = :mortalityCause, updated_at = CURRENT_TIMESTAMP
+WHERE id = :id;
+
+-- Queries: local_birth_events (paginated & indexed)
+selectBirthEventsByRanchPaged:
+SELECT * FROM local_birth_events
+WHERE ranch_id = :ranchId
+ORDER BY birth_date DESC
+LIMIT :limit OFFSET :offset;
+
+selectBirthEventById:
+SELECT * FROM local_birth_events
+WHERE id = :id;
+
+selectBirthEventsByDam:
+SELECT * FROM local_birth_events
+WHERE dam_id = :damId
+ORDER BY birth_date DESC;
+
+insertBirthEvent:
+INSERT OR REPLACE INTO local_birth_events (
+    id, ranch_id, dam_id, sire_id, birth_date,
+    live_births, stillborns, parturition_type, conception_method,
+    photo_s3_key, local_photo_path, registered_by_user_id, notes,
+    created_at, updated_at
+) VALUES (
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?, ?, ?,
+    ?, ?
+);
+
+-- Queries: local_weight_measurements (paginated & indexed)
+selectWeightsByAnimalPaged:
+SELECT * FROM local_weight_measurements
+WHERE animal_id = :animalId
+ORDER BY measurement_date DESC
+LIMIT :limit OFFSET :offset;
+
+selectLatestWeightByAnimal:
+SELECT * FROM local_weight_measurements
+WHERE animal_id = :animalId
+ORDER BY measurement_date DESC
+LIMIT 1;
+
+insertWeightMeasurement:
+INSERT OR REPLACE INTO local_weight_measurements (
+    id, ranch_id, animal_id, milestone, weight_kg,
+    scrotal_circumference_cm, measurement_date, notes,
+    created_at, updated_at
+) VALUES (
+    ?, ?, ?, ?, ?,
+    ?, ?, ?,
+    ?, ?
+);

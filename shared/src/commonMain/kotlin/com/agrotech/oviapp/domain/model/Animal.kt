@@ -29,6 +29,13 @@ data class Animal(
     val damId: String? = null,
     val externalSireFolio: String? = null,
     val externalDamFolio: String? = null,
+    val entryReason: String = "BIRTH",
+    val criadorName: String? = null,
+    val photoS3Key: String? = null,
+    val birthEventId: String? = null,
+    val mortalityDateIso: String? = null,
+    val mortalityCause: String? = null,
+    val updatedAtIso: String? = null,
     val lifeStage: LifeStage,
     val reproductiveStatus: ReproductiveStatus,
     val status: AnimalStatus = AnimalStatus.ACTIVE

@@ -1,0 +1,99 @@
+-- Migration v1 -> v2: APP-01 expanded schema and mirror tables
+
+-- 1. Rebuild local_animals with final schema and explicit column migration
+CREATE TABLE local_animals_new (
+    id TEXT NOT NULL PRIMARY KEY,
+    ranch_id TEXT NOT NULL,
+    folio_interno TEXT NOT NULL,
+    siniiga_chip TEXT,
+    registro_uno TEXT,
+    adn TEXT,
+    breed TEXT NOT NULL,
+    color TEXT NOT NULL,
+    sex TEXT NOT NULL,
+    birth_date TEXT NOT NULL,
+    weaning_date TEXT,
+    parturition_type TEXT NOT NULL DEFAULT 'SIMPLE',
+    conception_method TEXT NOT NULL DEFAULT 'MN',
+    sire_id TEXT,
+    dam_id TEXT,
+    external_sire_folio TEXT,
+    external_dam_folio TEXT,
+    entry_reason TEXT NOT NULL DEFAULT 'BIRTH',
+    criador_name TEXT,
+    photo_s3_key TEXT,
+    birth_event_id TEXT,
+    mortality_date TEXT,
+    mortality_cause TEXT,
+    life_stage TEXT NOT NULL,
+    reproductive_status TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (ranch_id, folio_interno)
+);
+
+INSERT INTO local_animals_new (
+    id, ranch_id, folio_interno, siniiga_chip, registro_uno,
+    breed, color, sex, birth_date, weaning_date,
+    sire_id, dam_id, life_stage, reproductive_status, status,
+    updated_at
+)
+SELECT
+    id, ranch_id, folio_interno, siniiga_chip, registro_uno,
+    breed, color, sex, birth_date, weaning_date,
+    sire_id, dam_id, life_stage, reproductive_status, status,
+    CURRENT_TIMESTAMP
+FROM local_animals;
+
+DROP TABLE local_animals;
+
+ALTER TABLE local_animals_new RENAME TO local_animals;
+
+-- 2. Mirror table: local_birth_events
+CREATE TABLE local_birth_events (
+    id TEXT NOT NULL PRIMARY KEY,
+    ranch_id TEXT NOT NULL,
+    dam_id TEXT NOT NULL,
+    sire_id TEXT,
+    birth_date TEXT NOT NULL,
+    live_births INTEGER NOT NULL DEFAULT 0,
+    stillborns INTEGER NOT NULL DEFAULT 0,
+    parturition_type TEXT NOT NULL DEFAULT 'SIMPLE',
+    conception_method TEXT NOT NULL DEFAULT 'MN',
+    photo_s3_key TEXT,
+    local_photo_path TEXT,
+    registered_by_user_id TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 3. Mirror table: local_weight_measurements
+CREATE TABLE local_weight_measurements (
+    id TEXT NOT NULL PRIMARY KEY,
+    ranch_id TEXT NOT NULL,
+    animal_id TEXT NOT NULL,
+    milestone TEXT NOT NULL,
+    weight_kg REAL NOT NULL,
+    scrotal_circumference_cm REAL,
+    measurement_date TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. Indexes for lists of 1,000+ animals
+CREATE INDEX idx_local_animals_ranch_status ON local_animals (ranch_id, status);
+CREATE INDEX idx_local_animals_ranch_sex_stage ON local_animals (ranch_id, sex, life_stage);
+CREATE INDEX idx_local_animals_ranch_folio ON local_animals (ranch_id, folio_interno);
+CREATE INDEX idx_local_animals_ranch_chip ON local_animals (ranch_id, siniiga_chip);
+CREATE INDEX idx_local_animals_dam ON local_animals (dam_id);
+CREATE INDEX idx_local_animals_sire ON local_animals (sire_id);
+CREATE INDEX idx_local_animals_birth_event ON local_animals (birth_event_id);
+CREATE INDEX idx_local_animals_weaning_pending ON local_animals (birth_date, status, weaning_date);
+
+CREATE INDEX idx_local_birth_events_ranch_date ON local_birth_events (ranch_id, birth_date DESC);
+CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
+
+CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
+CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
