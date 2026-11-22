@@ -9,9 +9,10 @@ data class AuthSession(
     val username: String,
     val role: String,
     val ranchId: String? = null,
-    val permissions: Map<String, Boolean> = emptyMap()
+    val permissions: Map<String, Boolean> = emptyMap(),
+    val sessionId: String = ""
 ) {
-    val normalizedRole: String get() = role.uppercase().removePrefix("ROLE_")
+    val normalizedRole: String get() = role.uppercase().removePrefix("ROLE_").trim()
 
     val isOwner: Boolean get() = normalizedRole == "OWNER"
     val isWorkerBranch: Boolean get() = normalizedRole == "WORKER_BRANCH"

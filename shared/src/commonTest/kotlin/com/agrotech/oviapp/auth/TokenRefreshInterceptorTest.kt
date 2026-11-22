@@ -43,7 +43,8 @@ class TokenRefreshInterceptorTest {
             refreshToken = "valid-refresh-token",
             username = "prod1",
             role = "OWNER",
-            ranchId = "ranch-1"
+            ranchId = "ranch-1",
+            sessionId = "session-1"
         )
         storage.saveSession(initialSession)
 
@@ -118,6 +119,7 @@ class TokenRefreshInterceptorTest {
         assertNotNull(updatedSession)
         assertEquals("new-valid-token", updatedSession.accessToken)
         assertEquals("rotated-refresh-token", updatedSession.refreshToken)
+        assertEquals("session-1", updatedSession.sessionId)
     }
 
     @Test
@@ -127,11 +129,11 @@ class TokenRefreshInterceptorTest {
             accessToken = "expired-token",
             refreshToken = "revoked-refresh-token",
             username = "prod1",
-            role = "OWNER"
+            role = "OWNER",
+            sessionId = "session-1"
         )
         storage.saveSession(initialSession)
 
-        // Mock engine for protected resource
         val resourceEngine = MockEngine { _ ->
             respond(
                 content = """{"error":"Token expired"}""",
@@ -140,7 +142,6 @@ class TokenRefreshInterceptorTest {
             )
         }
 
-        // Mock engine for /auth/refresh returning 401 (revoked/expired refresh token)
         val refreshEngine = MockEngine { _ ->
             respond(
                 content = """{"error":"Refresh token revoked"}""",
@@ -167,7 +168,6 @@ class TokenRefreshInterceptorTest {
         val response = apiClient.get("https://du6aq4me7fp0q.cloudfront.net/api/v1/animals")
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
-        // Refresh token was invalid/revoked -> Session MUST be cleared
         assertFalse(storage.hasSession(), "Session should be cleared on invalid/revoked refresh token")
         assertNull(storage.getSession())
     }
@@ -179,7 +179,8 @@ class TokenRefreshInterceptorTest {
             accessToken = "expired-token",
             refreshToken = "valid-refresh-token",
             username = "prod1",
-            role = "OWNER"
+            role = "OWNER",
+            sessionId = "session-1"
         )
         storage.saveSession(initialSession)
 
@@ -191,7 +192,6 @@ class TokenRefreshInterceptorTest {
             )
         }
 
-        // Mock engine for /auth/refresh simulating network failure (IOException / no connection)
         val refreshEngine = MockEngine { _ ->
             throw IOException("No route to host / connection timed out")
         }
@@ -214,10 +214,198 @@ class TokenRefreshInterceptorTest {
         val response = apiClient.get("https://du6aq4me7fp0q.cloudfront.net/api/v1/animals")
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
-        // Network error -> Session MUST NOT be cleared
         assertTrue(storage.hasSession(), "Session must be preserved when refresh fails due to network error")
         assertEquals("expired-token", storage.getSession()?.accessToken)
         assertEquals("valid-refresh-token", storage.getSession()?.refreshToken)
+    }
+
+    @Test
+    fun testDifferentHostDoesNotReceiveAuthHeadersOrRefresh() = runTest {
+        val storage = FakeSessionStorage()
+        val session = AuthSession(
+            accessToken = "secret-jwt-token",
+            refreshToken = "secret-refresh-token",
+            username = "prod1",
+            role = "OWNER",
+            ranchId = "ranch-123",
+            sessionId = "session-1"
+        )
+        storage.saveSession(session)
+
+        var authHeaderSent: String? = null
+        var ranchHeaderSent: String? = null
+        var refreshCalls = 0
+
+        val externalEngine = MockEngine { request ->
+            authHeaderSent = request.headers[HttpHeaders.Authorization]
+            ranchHeaderSent = request.headers["X-Active-Ranch-Id"]
+            respond(
+                content = """{"error":"Access Denied"}""",
+                status = HttpStatusCode.Unauthorized,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val refreshEngine = MockEngine { _ ->
+            refreshCalls++
+            respond(
+                content = """{"accessToken":"new-token"}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val refreshClient = HttpClient(refreshEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val apiClient = HttpClient(externalEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val interceptor = TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://du6aq4me7fp0q.cloudfront.net/api/v1",
+            refreshClient = refreshClient
+        )
+        interceptor.attachTo(apiClient)
+
+        // Make request to external host (e.g. S3 bucket)
+        val response = apiClient.get("https://s3.amazonaws.com/agrotech-media/photos/sheep1.jpg")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertNull(authHeaderSent, "External host must NOT receive Authorization header")
+        assertNull(ranchHeaderSent, "External host must NOT receive X-Active-Ranch-Id header")
+        assertEquals(0, refreshCalls, "External host 401 must NOT trigger auth refresh")
+    }
+
+    @Test
+    fun testSuccessfulRefreshWithMissingTokenFieldsDoesNotClearStoredSession() = runTest {
+        val storage = FakeSessionStorage()
+        val initialSession = AuthSession(
+            accessToken = "current-token",
+            refreshToken = "current-refresh",
+            username = "prod1",
+            role = "OWNER",
+            sessionId = "session-1"
+        )
+        storage.saveSession(initialSession)
+
+        val resourceEngine = MockEngine { _ ->
+            respond(
+                content = """{"error":"Unauthorized"}""",
+                status = HttpStatusCode.Unauthorized,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        // Refresh returns 200 OK but with empty/missing token fields (e.g. malformed JSON response)
+        val refreshEngine = MockEngine { _ ->
+            respond(
+                content = """{"data": null, "accessToken": ""}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val refreshClient = HttpClient(refreshEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val apiClient = HttpClient(resourceEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val interceptor = TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = KtorAuthService.DEFAULT_BASE_URL,
+            refreshClient = refreshClient
+        )
+        interceptor.attachTo(apiClient)
+
+        val response = apiClient.get("https://du6aq4me7fp0q.cloudfront.net/api/v1/animals")
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        // Missing token fields on 200 OK must NOT clear the stored session!
+        assertTrue(storage.hasSession(), "Session must NOT be cleared when 200 response has missing token fields")
+        assertEquals("current-token", storage.getSession()?.accessToken)
+    }
+
+    @Test
+    fun testReplacementAccountPreventsReplayingOriginalRequest() = runTest {
+        val storage = FakeSessionStorage()
+        val userASession = AuthSession(
+            accessToken = "user-a-expired-token",
+            refreshToken = "user-a-refresh",
+            username = "user_a",
+            role = "OWNER",
+            ranchId = "ranch-a",
+            sessionId = "session-a"
+        )
+        storage.saveSession(userASession)
+
+        var requestCount = 0
+
+        val resourceEngine = MockEngine { request ->
+            requestCount++
+            val auth = request.headers[HttpHeaders.Authorization]
+            if (auth == "Bearer user-a-expired-token") {
+                // Simulate: while this request is being processed, User B logs in!
+                storage.saveSession(
+                    AuthSession(
+                        accessToken = "user-b-active-token",
+                        refreshToken = "user-b-refresh",
+                        username = "user_b",
+                        role = "OWNER",
+                        ranchId = "ranch-b",
+                        sessionId = "session-b"
+                    )
+                )
+                respond(
+                    content = """{"error":"Unauthorized"}""",
+                    status = HttpStatusCode.Unauthorized,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json")
+                )
+            } else {
+                respond(
+                    content = """{"status":"ok"}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json")
+                )
+            }
+        }
+
+        val refreshEngine = MockEngine { _ ->
+            respond(
+                content = """{"accessToken":"user-a-new-token"}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val refreshClient = HttpClient(refreshEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val apiClient = HttpClient(resourceEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val interceptor = TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = KtorAuthService.DEFAULT_BASE_URL,
+            refreshClient = refreshClient
+        )
+        interceptor.attachTo(apiClient)
+
+        val response = apiClient.get("https://du6aq4me7fp0q.cloudfront.net/api/v1/animals")
+
+        // Should return 401 and NOT replay with User B's credentials
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertEquals(1, requestCount, "Request must NOT be replayed with replacement account's credentials")
+        // User B's session must remain intact in storage!
+        assertEquals("user_b", storage.getSession()?.username)
+        assertEquals("session-b", storage.getSession()?.sessionId)
     }
 
     @Test
@@ -227,7 +415,8 @@ class TokenRefreshInterceptorTest {
             accessToken = "expired-token",
             refreshToken = "valid-refresh",
             username = "worker",
-            role = "WORKER_BRANCH"
+            role = "WORKER_BRANCH",
+            sessionId = "session-1"
         )
         storage.saveSession(initialSession)
 
@@ -287,5 +476,34 @@ class TokenRefreshInterceptorTest {
         // Mutex guarantees only 1 refresh call was made
         assertEquals(1, refreshCallCount.get(), "Only one refresh call should be made for concurrent 401s")
         assertEquals("new-token", storage.getSession()?.accessToken)
+    }
+
+    @Test
+    fun testClientCloseClosesRefreshClient() {
+        val storage = FakeSessionStorage()
+        var refreshEngineClosed = false
+
+        val refreshEngine = MockEngine { _ ->
+            respond(
+                content = """{"accessToken":"token"}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val refreshClient = HttpClient(refreshEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val authenticatedClient = TokenRefreshInterceptor.createAuthenticatedClient(
+            sessionStorage = storage,
+            baseUrl = KtorAuthService.DEFAULT_BASE_URL,
+            refreshClient = refreshClient
+        )
+
+        // Closing the authenticated client should close the refresh client
+        authenticatedClient.close()
+        // Client coroutines job is closed/cancelled
+        assertFalse(authenticatedClient.coroutineContext[kotlinx.coroutines.Job]?.isActive ?: true)
     }
 }

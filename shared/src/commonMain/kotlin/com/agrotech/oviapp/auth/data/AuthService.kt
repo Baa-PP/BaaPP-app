@@ -14,6 +14,7 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
+import kotlin.random.Random
 
 interface AuthService : AutoCloseable {
     suspend fun login(username: String, password: String): AuthSession
@@ -69,7 +70,8 @@ class KtorAuthService internal constructor(
             username = loginResponse.resolveUsername(trimmedUser),
             role = loginResponse.resolveRole(),
             ranchId = loginResponse.resolveRanchId(),
-            permissions = loginResponse.resolvePermissions()
+            permissions = loginResponse.resolvePermissions(),
+            sessionId = generateSessionId()
         )
     }
 
@@ -79,6 +81,8 @@ class KtorAuthService internal constructor(
 
     companion object {
         const val DEFAULT_BASE_URL = "https://du6aq4me7fp0q.cloudfront.net/api/v1"
+
+        fun generateSessionId(): String = "sess_" + Random.nextLong().toString(16)
 
         fun enforceHttps(url: String) {
             if (!url.startsWith("https://", ignoreCase = true)) {

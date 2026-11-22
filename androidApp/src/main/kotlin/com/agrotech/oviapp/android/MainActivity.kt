@@ -5,11 +5,23 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -20,6 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
@@ -27,6 +41,7 @@ import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,6 +96,11 @@ class MainActivity : ComponentActivity() {
                                     repository.close()
                                 }
                             }
+                        },
+                        onResetStorage = {
+                            try {
+                                applicationContext.deleteSharedPreferences("baapp_secure_session_prefs")
+                            } catch (_: Exception) {}
                         }
                     )
                 }
@@ -101,20 +121,33 @@ class MainActivity : ComponentActivity() {
 private sealed interface InitialState {
     data object Loading : InitialState
     data class Ready(val repository: AuthRepository, val cachedSession: AuthSession?) : InitialState
+    data class Error(val message: String) : InitialState
 }
 
 @Composable
 private fun MainApp(
-    onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>?
+    onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>?,
+    onResetStorage: suspend () -> Unit
 ) {
     var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
+    var retryKey by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        val result = withContext(Dispatchers.IO) {
-            onInitRepository()
-        }
-        if (result != null) {
-            state = InitialState.Ready(result.first, result.second)
+    LaunchedEffect(retryKey) {
+        state = InitialState.Loading
+        try {
+            val result = withContext(Dispatchers.IO) {
+                onInitRepository()
+            }
+            if (result != null) {
+                state = InitialState.Ready(result.first, result.second)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            state = InitialState.Error(
+                message = e.message ?: "No se pudo inicializar el almacenamiento seguro."
+            )
         }
     }
 
@@ -138,6 +171,69 @@ private fun MainApp(
                 authRepository = current.repository,
                 initialSession = current.cachedSession
             )
+        }
+        is InitialState.Error -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFFF7F9F7))
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Aviso de Almacenamiento",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFB71C1C)
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = current.message,
+                            style = MaterialTheme.typography.bodyMedium.copy(color = Color.DarkGray),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = { retryKey++ },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                        ) {
+                            Text("Reintentar Inicio", color = Color.White)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        onResetStorage()
+                                    }
+                                    retryKey++
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("Restablecer Sesión", color = Color(0xFFB71C1C))
+                        }
+                    }
+                }
+            }
         }
     }
 }

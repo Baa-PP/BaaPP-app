@@ -32,6 +32,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
             .putString(KEY_ROLE, session.role)
             .putString(KEY_RANCH_ID, session.ranchId)
             .putString(KEY_PERMISSIONS, json.encodeToString(session.permissions))
+            .putString(KEY_SESSION_ID, session.sessionId)
             .apply()
     }
 
@@ -40,7 +41,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
         if (token.isNullOrBlank()) return null
 
         val username = prefs.getString(KEY_USERNAME, "") ?: ""
-        val role = prefs.getString(KEY_ROLE, "OWNER") ?: "OWNER"
+        val role = prefs.getString(KEY_ROLE, "WORKER_BRANCH") ?: "WORKER_BRANCH"
         val refreshToken = prefs.getString(KEY_REFRESH_TOKEN, null)
         val ranchId = prefs.getString(KEY_RANCH_ID, null)
         val permString = prefs.getString(KEY_PERMISSIONS, null)
@@ -53,6 +54,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
         } else {
             emptyMap()
         }
+        val sessionId = prefs.getString(KEY_SESSION_ID, null) ?: "${username}_${token.hashCode()}"
 
         return AuthSession(
             accessToken = token,
@@ -60,7 +62,8 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
             username = username,
             role = role,
             ranchId = ranchId,
-            permissions = permissions
+            permissions = permissions,
+            sessionId = sessionId
         )
     }
 
@@ -80,5 +83,6 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
         private const val KEY_ROLE = "sec_role"
         private const val KEY_RANCH_ID = "sec_ranch_id"
         private const val KEY_PERMISSIONS = "sec_permissions_json"
+        private const val KEY_SESSION_ID = "sec_session_id"
     }
 }

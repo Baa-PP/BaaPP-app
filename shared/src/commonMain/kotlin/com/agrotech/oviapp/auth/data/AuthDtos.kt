@@ -46,10 +46,13 @@ data class LoginResponse(
     fun resolveRefreshToken(): String? =
         data?.resolveRefreshToken() ?: refreshToken ?: refresh_token
 
-    fun resolveRole(): String =
-        (data?.user?.role ?: user?.role ?: data?.role ?: role ?: "OWNER")
-            .uppercase()
-            .removePrefix("ROLE_")
+    fun resolveRole(): String {
+        val raw = (data?.user?.role ?: user?.role ?: data?.role ?: role)
+            ?.uppercase()
+            ?.removePrefix("ROLE_")
+            ?.trim()
+        return if (raw != null && raw in VALID_ROLES) raw else DEFAULT_FALLBACK_ROLE
+    }
 
     fun resolveRanchId(): String? =
         data?.user?.ranchId ?: user?.ranchId ?: data?.user?.ranch_id ?: user?.ranch_id ?: data?.ranchId ?: ranchId ?: data?.ranch_id ?: ranch_id
@@ -63,6 +66,11 @@ data class LoginResponse(
 
     fun resolveUsername(fallback: String): String =
         data?.user?.username ?: user?.username ?: fallback
+
+    companion object {
+        val VALID_ROLES = setOf("OWNER", "WORKER_BRANCH", "VET_TECHNICIAN", "ASSOCIATION_SUPERUSER")
+        const val DEFAULT_FALLBACK_ROLE = "WORKER_BRANCH"
+    }
 }
 
 @Serializable

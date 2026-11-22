@@ -176,6 +176,34 @@ class AuthRepositoryTest {
     }
 
     @Test
+    fun testUnrecognizedOrMissingRoleResolvesToWorkerBranchAndNeverOwner() {
+        // Missing role
+        val missingRole = LoginResponse(role = null, user = UserDto(role = null))
+        assertEquals("WORKER_BRANCH", missingRole.resolveRole())
+
+        // Empty/whitespace role
+        val emptyRole = LoginResponse(role = "   ")
+        assertEquals("WORKER_BRANCH", emptyRole.resolveRole())
+
+        // Unrecognized role
+        val unknownRole = LoginResponse(role = "ROLE_SUPER_USER_UNKNOWN")
+        assertEquals("WORKER_BRANCH", unknownRole.resolveRole())
+
+        // Non-owner session requires explicit permission entries
+        val session = AuthSession(
+            accessToken = "tok",
+            username = "pepe",
+            role = missingRole.resolveRole(),
+            permissions = mapOf("capture" to true, "delete" to false)
+        )
+        assertFalse(session.isOwner)
+        assertTrue(session.isWorkerBranch)
+        assertTrue(session.hasPermission("capture"))
+        assertFalse(session.hasPermission("delete"))
+        assertFalse(session.hasPermission("unknown_action"))
+    }
+
+    @Test
     fun testCancellationExceptionIsRethrown() = runTest {
         val storage = FakeSessionStorage()
         val service = FakeAuthService(
