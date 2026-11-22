@@ -65,10 +65,13 @@ class TokenRefreshInterceptor(
             val matchesOrigin = isMatchingOrigin(requestUrl)
             val isAuthEndpoint = request.url.encodedPath.contains("/auth/")
 
-            // 1. Add credentials only if request matches baseUrl's origin and is not an auth endpoint
+            // 1. Add credentials only if request matches baseUrl's origin and is not an auth endpoint.
+            // Strip HEADER_ACTIVE_RANCH_ID if a redirect carried it to a foreign origin.
             val capturedSession = if (matchesOrigin && !isAuthEndpoint) sessionStorage.getSession() else null
 
-            if (matchesOrigin && !isAuthEndpoint && capturedSession != null) {
+            if (!matchesOrigin) {
+                request.headers.remove(HEADER_ACTIVE_RANCH_ID)
+            } else if (!isAuthEndpoint && capturedSession != null) {
                 if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession.accessToken.isNotBlank()) {
                     request.header(HttpHeaders.Authorization, "Bearer ${capturedSession.accessToken}")
                 }
@@ -98,13 +101,17 @@ class TokenRefreshInterceptor(
                         currentSession.sessionId != capturedSession.sessionId -> {
                             false
                         }
+                        // Confirm the request's original credentials belonged to capturedSession
+                        tokenUsed != capturedSession.accessToken -> {
+                            false
+                        }
                         // Token changed within the SAME session generation (concurrent refresh succeeded)
                         currentSession.accessToken != tokenUsed && currentSession.accessToken.isNotBlank() -> {
                             true
                         }
                         // Stored refresh token is missing or blank
                         currentSession.refreshToken.isNullOrBlank() -> {
-                            sessionStorage.clearSession()
+                            sessionStorage.clearSessionIfMatchesGeneration(capturedSession.sessionId)
                             false
                         }
                         // Need to call POST /api/v1/auth/refresh
@@ -150,30 +157,21 @@ class TokenRefreshInterceptor(
                 response.status == HttpStatusCode.Unauthorized ||
                 response.status == HttpStatusCode.Forbidden ||
                 response.status == HttpStatusCode.BadRequest -> {
-                    // Invalidate only if stored session still belongs to this generation
-                    val stored = sessionStorage.getSession()
-                    if (stored != null && stored.sessionId == initialSession.sessionId) {
-                        sessionStorage.clearSession()
-                    }
+                    // Atomically invalidate only if stored session still belongs to this generation
+                    sessionStorage.clearSessionIfMatchesGeneration(initialSession.sessionId)
                     false
                 }
                 response.status.isSuccess() -> {
                     val refreshResponse = response.body<RefreshResponse>()
                     val newAccessToken = refreshResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
                     if (newAccessToken != null) {
-                        val stored = sessionStorage.getSession()
-                        if (stored != null && stored.sessionId == initialSession.sessionId) {
-                            val newRefreshToken = refreshResponse.resolveRefreshToken()?.takeIf { it.isNotBlank() }
-                                ?: initialSession.refreshToken
-                            val updatedSession = stored.copy(
+                        val newRefreshToken = refreshResponse.resolveRefreshToken()?.takeIf { it.isNotBlank() }
+                            ?: initialSession.refreshToken
+                        sessionStorage.updateSessionIfMatchesGeneration(initialSession.sessionId) { stored ->
+                            stored.copy(
                                 accessToken = newAccessToken,
                                 refreshToken = newRefreshToken
                             )
-                            sessionStorage.saveSession(updatedSession)
-                            true
-                        } else {
-                            // Account was replaced while refresh was running
-                            false
                         }
                     } else {
                         // Missing/empty token fields on 200 OK: fail refresh WITHOUT clearing stored session

@@ -189,6 +189,10 @@ class AuthRepositoryTest {
         val unknownRole = LoginResponse(role = "ROLE_SUPER_USER_UNKNOWN")
         assertEquals("WORKER_BRANCH", unknownRole.resolveRole())
 
+        // Leading/trailing whitespace around ROLE_ prefix normalizes consistently
+        val paddedOwner = LoginResponse(role = " role_owner ")
+        assertEquals("OWNER", paddedOwner.resolveRole())
+
         // Non-owner session requires explicit permission entries
         val session = AuthSession(
             accessToken = "tok",

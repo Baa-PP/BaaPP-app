@@ -48,6 +48,7 @@ data class LoginResponse(
 
     fun resolveRole(): String {
         val raw = (data?.user?.role ?: user?.role ?: data?.role ?: role)
+            ?.trim()
             ?.uppercase()
             ?.removePrefix("ROLE_")
             ?.trim()

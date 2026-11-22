@@ -9,6 +9,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -512,5 +513,146 @@ class TokenRefreshInterceptorTest {
         // Both clients' jobs must be inactive after closing and awaiting authenticatedClient
         assertFalse(authJob?.isActive ?: true, "Authenticated client job must be inactive")
         assertFalse(refreshJob?.isActive ?: true, "Refresh client job must be inactive")
+    }
+
+    @Test
+    fun testCrossOriginRedirectStripsRanchHeaderWhileSameOriginPreservesIt() = runTest {
+        val storage = FakeSessionStorage()
+        storage.saveSession(
+            AuthSession(
+                accessToken = "tok-1",
+                refreshToken = "ref-1",
+                username = "owner",
+                role = "OWNER",
+                ranchId = "ranch-99",
+                sessionId = "sess-1"
+            )
+        )
+
+        val observedRanchHeaders = mutableListOf<Pair<String, String?>>()
+
+        val apiEngine = MockEngine { request ->
+            val host = request.url.host
+            observedRanchHeaders += host to request.headers[TokenRefreshInterceptor.HEADER_ACTIVE_RANCH_ID]
+            when (request.url.encodedPath) {
+                "/api/v1/redirect-external" -> respond(
+                    content = "",
+                    status = HttpStatusCode.Found,
+                    headers = headersOf(HttpHeaders.Location, "https://cdn.external.com/media.jpg")
+                )
+                "/api/v1/redirect-internal" -> respond(
+                    content = "",
+                    status = HttpStatusCode.Found,
+                    headers = headersOf(HttpHeaders.Location, "https://api.baapp.mx/api/v1/animals")
+                )
+                else -> respond(
+                    content = """{"ok":true}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, "application/json")
+                )
+            }
+        }
+
+        val client = HttpClient(apiEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val interceptor = TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://api.baapp.mx/api/v1",
+            refreshClient = HttpClient(MockEngine { respond("", HttpStatusCode.OK) })
+        )
+        interceptor.attachTo(client)
+
+        val extResp = client.get("https://api.baapp.mx/api/v1/redirect-external")
+        assertEquals(HttpStatusCode.OK, extResp.status)
+
+        val intResp = client.get("https://api.baapp.mx/api/v1/redirect-internal")
+        assertEquals(HttpStatusCode.OK, intResp.status)
+
+        // First hop to api.baapp.mx has ranch header; redirect to cdn.external.com must NOT have it
+        assertEquals("api.baapp.mx" to "ranch-99", observedRanchHeaders[0])
+        assertEquals("cdn.external.com" to null, observedRanchHeaders[1])
+        // Same-origin redirect preserves ranch header
+        assertEquals("api.baapp.mx" to "ranch-99", observedRanchHeaders[2])
+        assertEquals("api.baapp.mx" to "ranch-99", observedRanchHeaders[3])
+    }
+
+    @Test
+    fun testForeignAuthorizationHeaderDoesNotTriggerRefreshOrReplay() = runTest {
+        val storage = FakeSessionStorage()
+        storage.saveSession(
+            AuthSession(
+                accessToken = "session-token",
+                refreshToken = "session-refresh",
+                username = "owner",
+                role = "OWNER",
+                ranchId = "ranch-1",
+                sessionId = "sess-1"
+            )
+        )
+
+        var refreshCalled = false
+        var apiCalls = 0
+
+        val apiEngine = MockEngine { _ ->
+            apiCalls++
+            respond(
+                content = """{"error":"unauthorized"}""",
+                status = HttpStatusCode.Unauthorized,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+        val refreshEngine = MockEngine { _ ->
+            refreshCalled = true
+            respond(
+                content = """{"accessToken":"new-token"}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val client = HttpClient(apiEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val refreshClient = HttpClient(refreshEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://api.baapp.mx/api/v1",
+            refreshClient = refreshClient
+        ).attachTo(client)
+
+        val response = client.get("https://api.baapp.mx/api/v1/animals") {
+            header(HttpHeaders.Authorization, "Bearer foreign-account-token")
+        }
+
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertFalse(refreshCalled, "Refresh must not be called for foreign credentials")
+        assertEquals(1, apiCalls, "Request with foreign credentials must not be replayed")
+        assertEquals("session-token", storage.getSession()?.accessToken)
+    }
+
+    @Test
+    fun testAtomicGenerationMutationRejectsStaleSessionUpdates() {
+        val storage = FakeSessionStorage()
+        val sess2 = AuthSession(
+            accessToken = "tok-2",
+            refreshToken = "ref-2",
+            username = "user2",
+            role = "OWNER",
+            sessionId = "sess-2"
+        )
+        storage.saveSession(sess2)
+
+        val updated = storage.updateSessionIfMatchesGeneration("sess-1") {
+            it.copy(accessToken = "stale-tok")
+        }
+        val cleared = storage.clearSessionIfMatchesGeneration("sess-1")
+
+        assertFalse(updated)
+        assertFalse(cleared)
+        assertEquals("tok-2", storage.getSession()?.accessToken)
+        assertEquals("sess-2", storage.getSession()?.sessionId)
     }
 }

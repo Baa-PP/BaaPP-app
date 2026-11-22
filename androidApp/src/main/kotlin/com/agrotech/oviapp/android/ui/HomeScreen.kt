@@ -190,44 +190,50 @@ fun HomeScreen(
                 subtitle = "Hembras (vientres), Sementales y Crías",
                 badge = "APP-06"
             ) {
-                if (!capabilities.canReadInventory) {
-                    RestrictedBanner("Sin permiso de lectura para consultar el inventario.")
+                if (!capabilities.canReadInventory && !capabilities.canCapture && !capabilities.canEditGeneralRecords) {
+                    RestrictedBanner("Sin permiso para consultar, capturar o editar en el inventario.")
                 } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { showUpcomingNotice("Consulta de inventario disponible en APP-06") },
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 56.dp),
-                            shape = RoundedCornerShape(10.dp)
+                    if (capabilities.canReadInventory || capabilities.canCapture) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Consultar")
-                        }
+                            if (capabilities.canReadInventory) {
+                                OutlinedButton(
+                                    onClick = { showUpcomingNotice("Consulta de inventario disponible en APP-06") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 56.dp),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("Consultar")
+                                }
+                            }
 
-                        if (capabilities.canCapture) {
-                            Button(
-                                onClick = { showUpcomingNotice("Alta de ejemplar disponible en APP-06") },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 56.dp),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
-                            ) {
-                                Text("Alta de Ejemplar")
+                            if (capabilities.canCapture) {
+                                Button(
+                                    onClick = { showUpcomingNotice("Alta de ejemplar disponible en APP-06") },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 56.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                                ) {
+                                    Text("Alta de Ejemplar")
+                                }
                             }
                         }
                     }
 
                     if (capabilities.canEditGeneralRecords) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (capabilities.canReadInventory || capabilities.canCapture) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                         OutlinedButton(
                             onClick = { showUpcomingNotice("Edición de ficha/arete disponible en APP-06") },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 48.dp),
+                                .heightIn(min = 56.dp),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text("Editar Ficha / Reponer Arete")
@@ -292,21 +298,23 @@ fun HomeScreen(
                 subtitle = "Circunferencia escrotal, destetes a 75 días",
                 badge = "APP-15"
             ) {
-                if (!capabilities.canReadInventory) {
-                    RestrictedBanner("Sin permiso de lectura para consultar pesajes.")
+                if (!capabilities.canReadInventory && !capabilities.canCapture) {
+                    RestrictedBanner("Sin permisos para consultar o capturar pesajes.")
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedButton(
-                            onClick = { showUpcomingNotice("Historial de pesajes disponible en APP-15") },
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 56.dp),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Ver Pesajes")
+                        if (capabilities.canReadInventory) {
+                            OutlinedButton(
+                                onClick = { showUpcomingNotice("Historial de pesajes disponible en APP-15") },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 56.dp),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Ver Pesajes")
+                            }
                         }
 
                         if (capabilities.canCapture) {
@@ -351,7 +359,7 @@ fun HomeScreen(
                 onClick = onLogoutClick,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .heightIn(min = 56.dp),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text("Cerrar Sesión Segura", color = Color(0xFFB71C1C))

@@ -23,8 +23,42 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
     )
 
     private val json = Json { ignoreUnknownKeys = true }
+    private val lock = Any()
 
-    override fun saveSession(session: AuthSession) {
+    override fun saveSession(session: AuthSession) = synchronized(lock) {
+        writeSessionLocked(session)
+    }
+
+    override fun getSession(): AuthSession? = synchronized(lock) {
+        readSessionLocked()
+    }
+
+    override fun clearSession() = synchronized(lock) {
+        prefs.edit().clear().apply()
+    }
+
+    override fun hasSession(): Boolean = synchronized(lock) {
+        !prefs.getString(KEY_ACCESS_TOKEN, null).isNullOrBlank()
+    }
+
+    override fun updateSessionIfMatchesGeneration(
+        expectedSessionId: String,
+        transform: (AuthSession) -> AuthSession
+    ): Boolean = synchronized(lock) {
+        val current = readSessionLocked() ?: return false
+        if (current.sessionId != expectedSessionId) return false
+        writeSessionLocked(transform(current))
+        true
+    }
+
+    override fun clearSessionIfMatchesGeneration(expectedSessionId: String): Boolean = synchronized(lock) {
+        val current = readSessionLocked() ?: return false
+        if (current.sessionId != expectedSessionId) return false
+        prefs.edit().clear().apply()
+        true
+    }
+
+    private fun writeSessionLocked(session: AuthSession) {
         prefs.edit()
             .putString(KEY_ACCESS_TOKEN, session.accessToken)
             .putString(KEY_REFRESH_TOKEN, session.refreshToken)
@@ -36,7 +70,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
             .apply()
     }
 
-    override fun getSession(): AuthSession? {
+    private fun readSessionLocked(): AuthSession? {
         val token = prefs.getString(KEY_ACCESS_TOKEN, null)
         if (token.isNullOrBlank()) return null
 
@@ -65,14 +99,6 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
             permissions = permissions,
             sessionId = sessionId
         )
-    }
-
-    override fun clearSession() {
-        prefs.edit().clear().apply()
-    }
-
-    override fun hasSession(): Boolean {
-        return !prefs.getString(KEY_ACCESS_TOKEN, null).isNullOrBlank()
     }
 
     companion object {
