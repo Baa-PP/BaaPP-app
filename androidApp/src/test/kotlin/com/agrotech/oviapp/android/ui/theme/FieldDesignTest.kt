@@ -1,5 +1,7 @@
 package com.agrotech.oviapp.android.ui.theme
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.agrotech.oviapp.domain.model.Sex
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,13 +34,20 @@ class FieldDesignTest {
     }
 
     @Test
-    fun everyMaterialColorRoleOfBothThemesIsCheckedForContrast() {
-        val requiredPairs = listOf(
-            "Botón principal", "Secundario", "Terciario", "Alerta", "Texto sobre papel",
-            "Botón principal nocturno", "Secundario nocturno", "Terciario nocturno", "Alerta nocturna", "Texto nocturno",
-        )
-        requiredPairs.forEach { name ->
-            assertTrue(name in FieldPalette.textPairs, "Falta verificar el par de color: $name")
+    fun everyColorRoleOfBothRealThemesMeetsTheOutdoorContrast() {
+        mapOf("claro" to FieldLightColors, "oscuro" to FieldDarkColors).forEach { (themeName, scheme) ->
+            val rolePairs = mapOf(
+                "primary" to (scheme.onPrimary to scheme.primary),
+                "secondary" to (scheme.onSecondary to scheme.secondary),
+                "tertiary" to (scheme.onTertiary to scheme.tertiary),
+                "error" to (scheme.onError to scheme.error),
+                "background" to (scheme.onBackground to scheme.background),
+                "surface" to (scheme.onSurface to scheme.surface),
+            )
+            rolePairs.forEach { (role, pair) ->
+                val ratio = FieldContrast.ratio(pair.first.argb(), pair.second.argb())
+                assertTrue(ratio >= outdoorMinimum, "Tema $themeName, rol $role: contraste $ratio, se pide >= $outdoorMinimum")
+            }
         }
     }
 
@@ -64,4 +73,6 @@ class FieldDesignTest {
         assertEquals("Destete", FieldVocabulary.WEANING)
         assertEquals("Cría", FieldVocabulary.LAMB)
     }
+
+    private fun Color.argb(): Long = toArgb().toLong() and 0xFFFFFFFF
 }

@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agrotech.oviapp.domain.model.Sex
 
-private val FieldLightColors = lightColorScheme(
+internal val FieldLightColors = lightColorScheme(
     primary = Color(FieldPalette.PASTURE),
     onPrimary = Color(FieldPalette.ON_PASTURE),
     secondary = Color(FieldPalette.EARTH),
@@ -41,7 +41,7 @@ private val FieldLightColors = lightColorScheme(
     onError = Color(FieldPalette.ON_ALERT),
 )
 
-private val FieldDarkColors = darkColorScheme(
+internal val FieldDarkColors = darkColorScheme(
     primary = Color(FieldPalette.NIGHT_PASTURE),
     onPrimary = Color(FieldPalette.NIGHT_ON_PASTURE),
     secondary = Color(FieldPalette.NIGHT_EARTH),
