@@ -29,6 +29,10 @@ import com.agrotech.oviapp.domain.model.Sex
 private val FieldLightColors = lightColorScheme(
     primary = Color(FieldPalette.PASTURE),
     onPrimary = Color(FieldPalette.ON_PASTURE),
+    secondary = Color(FieldPalette.EARTH),
+    onSecondary = Color(FieldPalette.ON_EARTH),
+    tertiary = Color(FieldPalette.SKY),
+    onTertiary = Color(FieldPalette.ON_SKY),
     background = Color(FieldPalette.PAPER),
     onBackground = Color(FieldPalette.INK),
     surface = Color(FieldPalette.PAPER),
@@ -40,10 +44,16 @@ private val FieldLightColors = lightColorScheme(
 private val FieldDarkColors = darkColorScheme(
     primary = Color(FieldPalette.NIGHT_PASTURE),
     onPrimary = Color(FieldPalette.NIGHT_ON_PASTURE),
+    secondary = Color(FieldPalette.NIGHT_EARTH),
+    onSecondary = Color(FieldPalette.NIGHT_ON_EARTH),
+    tertiary = Color(FieldPalette.NIGHT_SKY),
+    onTertiary = Color(FieldPalette.NIGHT_ON_SKY),
     background = Color(FieldPalette.NIGHT_SURFACE),
     onBackground = Color(FieldPalette.NIGHT_INK),
     surface = Color(FieldPalette.NIGHT_SURFACE),
     onSurface = Color(FieldPalette.NIGHT_INK),
+    error = Color(FieldPalette.NIGHT_ALERT),
+    onError = Color(FieldPalette.NIGHT_ON_ALERT),
 )
 
 private val FieldTypography = Typography(

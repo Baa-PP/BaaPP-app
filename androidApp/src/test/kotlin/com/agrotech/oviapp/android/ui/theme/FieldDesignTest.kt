@@ -32,6 +32,17 @@ class FieldDesignTest {
     }
 
     @Test
+    fun everyMaterialColorRoleOfBothThemesIsCheckedForContrast() {
+        val requiredPairs = listOf(
+            "Botón principal", "Secundario", "Terciario", "Alerta", "Texto sobre papel",
+            "Botón principal nocturno", "Secundario nocturno", "Terciario nocturno", "Alerta nocturna", "Texto nocturno",
+        )
+        requiredPairs.forEach { name ->
+            assertTrue(name in FieldPalette.textPairs, "Falta verificar el par de color: $name")
+        }
+    }
+
+    @Test
     fun sexIdentityUsesPinkOrBlueTogetherWithTextAndSymbol() {
         val female = SexIdentity.of(Sex.FEMALE)
         val male = SexIdentity.of(Sex.MALE)

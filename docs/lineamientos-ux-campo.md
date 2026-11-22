@@ -16,10 +16,13 @@ Reglas para cualquier pantalla de captura. El código vive en `androidApp/src/ma
 | :--- | :---: |
 | Texto `#111111` sobre papel `#FFFFFF` | 18.9 : 1 |
 | Botón principal: blanco sobre verde `#1B5E20` | 7.9 : 1 |
+| Secundario: blanco sobre café `#4E342E` | 11.3 : 1 |
+| Terciario: blanco sobre azul `#0D47A1` | 8.6 : 1 |
 | Alerta: blanco sobre `#8E0000` | 9.8 : 1 |
 | Hembra `#880E4F` sobre `#FCE4EC` | 7.9 : 1 |
 | Macho `#0D47A1` sobre `#E3F2FD` | 7.6 : 1 |
 | Tema oscuro: hembra `#F48FB1` / macho `#90CAF9` / verde `#A5D6A7` sobre `#121212` | 8.4 / 10.7 / 11.4 : 1 |
+| Tema oscuro: secundario `#2B1A12` sobre `#D7CCC8` / terciario `#00264D` sobre `#90CAF9` / alerta `#3B0000` sobre `#FFB4AB` | 10.6 / 8.7 / 10.4 : 1 |
 
 ## Vocabulario del ganadero
 
@@ -29,5 +32,5 @@ Usar siempre estas palabras en etiquetas y botones (`FieldVocabulary`): **Arete*
 
 - [ ] Botones de captura con `CaptureButton` (o al menos `heightIn(min = 56.dp)`).
 - [ ] El sexo se muestra con `SexBadge`, nunca solo con color.
-- [ ] Colores tomados de `OviTheme` / `FieldPalette`; si se agrega un par nuevo de texto-fondo, sumarlo a `FieldPalette.textPairs` para que el test lo verifique.
+- [ ] Colores tomados de `OviTheme` / `FieldPalette` (todos los roles de Material del tema están definidos explícitamente); si se agrega un par nuevo de texto-fondo, sumarlo a `FieldPalette.textPairs` para que el test lo verifique.
 - [ ] Textos con el vocabulario del ganadero.
