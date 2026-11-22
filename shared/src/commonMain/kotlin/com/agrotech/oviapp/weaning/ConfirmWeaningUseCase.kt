@@ -11,6 +11,7 @@ import com.agrotech.oviapp.sync.SyncOperation
 import com.agrotech.oviapp.sync.UuidV7
 import com.agrotech.oviapp.sync.currentTimeMillis
 import com.agrotech.oviapp.weights.AnimalForWeighing
+import com.agrotech.oviapp.weights.Decimals
 import com.agrotech.oviapp.weights.WeightError
 import com.agrotech.oviapp.weights.WeightInput
 import com.agrotech.oviapp.weights.WeightMilestone
@@ -47,6 +48,9 @@ data class ConfirmWeaningInput(
     val scrotalCircumferenceCm: String? = null,
 )
 
+/** Pesaje WEANING ya capturado (APP-15) que confirmar destete va a reutilizar, como el backend. */
+data class ExistingWeaningWeight(val weightId: String, val weightKg: String, val date: LocalDate)
+
 sealed interface ConfirmWeaningResult {
     data class Confirmed(val weightId: String, val motherTransitionedToEmpty: Boolean) : ConfirmWeaningResult
     data class Rejected(
@@ -80,6 +84,16 @@ class ConfirmWeaningUseCase(
 ) {
     private val queries get() = database.oviAppDatabaseQueries
     private val json = Json { encodeDefaults = true }
+
+    /** Para que el formulario muestre, antes de confirmar, el pesaje que se va a usar en lugar del tecleado. */
+    fun existingWeaningWeight(animalId: String): ExistingWeaningWeight? =
+        queries.selectWeaningWeightForAnimal(animalId).executeAsOneOrNull()?.let {
+            ExistingWeaningWeight(
+                weightId = it.id,
+                weightKg = Decimals.format((it.weight_kg * 100).roundToLong(), scale = 2),
+                date = LocalDate.parse(it.measurement_date.take(10)),
+            )
+        }
 
     fun confirm(animalId: String, input: ConfirmWeaningInput): ConfirmWeaningResult {
         val lamb = queries.selectLambForWeaning(animalId).executeAsOneOrNull()
@@ -135,7 +149,11 @@ class ConfirmWeaningUseCase(
 
         val timestamp = now()
         var motherTransitioned = false
-        queue.writeAndEnqueue(SyncEntityType.WEANING, SyncOperation.CREATE, json.encodeToString(payload)) {
+        val mutation = queue.writeAndEnqueueIfChanged(SyncEntityType.WEANING, SyncOperation.CREATE, json.encodeToString(payload)) {
+            // Primero la cría, con guarda: si otra escritura ya la desteteó, no se guarda ni se encola nada.
+            queries.updateAnimalWeaning(weaningDate.toString(), stage, status, timestamp, lamb.id)
+            val lambRows = queue.changedRows()
+            if (lambRows == 0L) return@writeAndEnqueueIfChanged 0L
             if (existing == null) {
                 queries.insertWeightMeasurement(
                     weightId,
@@ -150,7 +168,6 @@ class ConfirmWeaningUseCase(
                     timestamp,
                 )
             }
-            queries.updateAnimalWeaning(weaningDate.toString(), stage, status, timestamp, lamb.id)
             lamb.dam_id?.let { damId ->
                 val damStatus = queries.selectReproductiveStatus(damId, lamb.ranch_id).executeAsOneOrNull()
                 if (damStatus == ReproductiveStatus.LACTATING.name) {
@@ -158,6 +175,10 @@ class ConfirmWeaningUseCase(
                     motherTransitioned = true
                 }
             }
+            lambRows
+        }
+        if (mutation == null) {
+            return ConfirmWeaningResult.Rejected(listOf(WeaningError.ANIMAL_ALREADY_WEANED), emptyList())
         }
         return ConfirmWeaningResult.Confirmed(weightId = weightId, motherTransitionedToEmpty = motherTransitioned)
     }

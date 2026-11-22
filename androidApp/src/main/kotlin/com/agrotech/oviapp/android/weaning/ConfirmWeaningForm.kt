@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.weaning.ConfirmWeaningInput
 import com.agrotech.oviapp.weaning.ConfirmWeaningResult
+import com.agrotech.oviapp.weaning.ExistingWeaningWeight
 import com.agrotech.oviapp.weaning.WeaningDestination
 import com.agrotech.oviapp.weaning.WeaningError
 import com.agrotech.oviapp.weights.WeightError
@@ -35,7 +36,8 @@ import kotlinx.datetime.todayIn
 
 /**
  * Formulario "Confirmar destete" (APP-18). Se abre desde la lista de destetes (APP-16) o la ficha de
- * la cría; [onConfirm] normalmente es `ConfirmWeaningUseCase.confirm(animalId, ...)`.
+ * la cría; [onConfirm] normalmente es `ConfirmWeaningUseCase.confirm(animalId, ...)` y [existing] es
+ * `ConfirmWeaningUseCase.existingWeaningWeight(animalId)`: si ya hay un pesaje de destete, se usa ese.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -43,6 +45,7 @@ fun ConfirmWeaningForm(
     animalId: String,
     folioInterno: String,
     sex: Sex,
+    existing: ExistingWeaningWeight?,
     onConfirm: (ConfirmWeaningInput) -> ConfirmWeaningResult,
     modifier: Modifier = Modifier,
 ) {
@@ -61,35 +64,44 @@ fun ConfirmWeaningForm(
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Destetar $folioInterno", style = MaterialTheme.typography.titleLarge)
 
-        OutlinedTextField(
-            value = weight,
-            onValueChange = { weight = it },
-            label = { Text("Peso al destete (kg)") },
-            isError = rejected?.weightErrors?.any {
-                it == WeightError.INVALID_WEIGHT_KG || it == WeightError.INVALID_WEIGHT_PRECISION
-            } == true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (showScrotal) {
+        // Igual que el backend: si ya se capturó el pesaje de destete (APP-15), se usa ese con su fecha.
+        // Se muestra de solo lectura para que nadie crea que se guardará otro peso.
+        if (existing != null) {
+            Text(
+                "Se usará el pesaje de destete ya capturado: ${existing.weightKg} kg del ${existing.date}.",
+                style = MaterialTheme.typography.titleMedium,
+            )
+        } else {
             OutlinedTextField(
-                value = scrotal,
-                onValueChange = { scrotal = it },
-                label = { Text("Circunferencia escrotal (cm, opcional)") },
+                value = weight,
+                onValueChange = { weight = it },
+                label = { Text("Peso al destete (kg)") },
+                isError = rejected?.weightErrors?.any {
+                    it == WeightError.INVALID_WEIGHT_KG || it == WeightError.INVALID_WEIGHT_PRECISION
+                } == true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (showScrotal) {
+                OutlinedTextField(
+                    value = scrotal,
+                    onValueChange = { scrotal = it },
+                    label = { Text("Circunferencia escrotal (cm, opcional)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            OutlinedTextField(
+                value = dateText,
+                onValueChange = { dateText = it },
+                label = { Text("Fecha de destete (AAAA-MM-DD)") },
+                isError = invalidDate,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
-        OutlinedTextField(
-            value = dateText,
-            onValueChange = { dateText = it },
-            label = { Text("Fecha de destete (AAAA-MM-DD)") },
-            isError = invalidDate,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
 
         Text("Destino", style = MaterialTheme.typography.titleMedium)
         // Los machos no ven "Recría": el backend lo rechaza (INVALID_WEANING_DESTINATION).
@@ -106,15 +118,15 @@ fun ConfirmWeaningForm(
 
         Button(
             onClick = {
-                val date = runCatching { LocalDate.parse(dateText.trim()) }.getOrNull()
+                val date = existing?.date ?: runCatching { LocalDate.parse(dateText.trim()) }.getOrNull()
                 invalidDate = date == null
                 if (date != null) {
                     result = onConfirm(
                         ConfirmWeaningInput(
                             weaningDate = date,
-                            weaningWeightKg = weight,
+                            weaningWeightKg = existing?.weightKg ?: weight,
                             destination = destination,
-                            scrotalCircumferenceCm = scrotal.takeIf { showScrotal },
+                            scrotalCircumferenceCm = scrotal.takeIf { showScrotal && existing == null },
                         ),
                     )
                 }

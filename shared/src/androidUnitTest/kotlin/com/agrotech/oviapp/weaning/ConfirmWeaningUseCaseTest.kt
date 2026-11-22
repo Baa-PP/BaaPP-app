@@ -150,6 +150,36 @@ class ConfirmWeaningUseCaseTest {
         assertEquals("18.0", payload["weaningWeightKg"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun previewShowsTheWeaningWeightThatWillBeReused() {
+        assertNull(useCase.existingWeaningWeight("lamb"))
+        driver.execute(
+            null,
+            """
+            INSERT INTO local_weight_measurements (id, ranch_id, animal_id, milestone, weight_kg, measurement_date)
+            VALUES ('prev', 'r1', 'lamb', 'WEANING', 18.5, '2026-11-20')
+            """.trimIndent(),
+            0,
+        )
+
+        assertEquals(ExistingWeaningWeight("prev", "18.50", LocalDate(2026, 11, 20)), useCase.existingWeaningWeight("lamb"))
+    }
+
+    @Test
+    fun ifTheLambWasWeanedMeanwhileNothingIsSavedOrQueued() {
+        // Simula otra escritura que ganó la carrera: la actualización con guarda ya no cambia la fila.
+        driver.execute(
+            null,
+            "CREATE TRIGGER lost_race BEFORE UPDATE ON local_animals WHEN OLD.id = 'lamb' BEGIN SELECT RAISE(IGNORE); END",
+            0,
+        )
+
+        val result = useCase.confirm("lamb", input())
+
+        assertEquals(listOf(WeaningError.ANIMAL_ALREADY_WEANED), assertIs<ConfirmWeaningResult.Rejected>(result).weaningErrors)
+        assertNothingChanged("lamb")
+    }
+
     private fun assertNothingChanged(lambId: String) {
         assertNull(animal(lambId).weaning_date)
         assertEquals("LACTATING", animal("dam").reproductive_status)
