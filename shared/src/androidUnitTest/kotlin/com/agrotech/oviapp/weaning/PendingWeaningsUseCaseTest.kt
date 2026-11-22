@@ -68,6 +68,15 @@ class PendingWeaningsUseCaseTest {
     }
 
     @Test
+    fun adultsWithoutAWeaningDateAreNeverListed() {
+        // Un semental o vientre comprado ya adulto no trae fecha de destete: no es una cría por destetar.
+        insertAnimal("ram", folio = "900", birth = "2022-03-01", stage = "ADULT")
+        insertAnimal("lamb", folio = "101", birth = "2026-09-08")
+
+        assertEquals(listOf("101"), useCase.list(ranchId = "r1").pending.map { it.folioInterno })
+    }
+
+    @Test
     fun theRanchTargetMovesTheDates() {
         insertAnimal("a65", folio = "200", birth = "2026-09-18") // 65 días
 
@@ -83,15 +92,16 @@ class PendingWeaningsUseCaseTest {
         status: String = "ACTIVE",
         weaningDate: String? = null,
         mortalityDate: String? = null,
+        stage: String = "LAMB_LACTATING",
     ) {
         driver.execute(
             identifier = null,
             sql = """
                 INSERT INTO local_animals (id, ranch_id, folio_interno, breed, color, sex, birth_date, weaning_date,
                     mortality_date, life_stage, reproductive_status, status)
-                VALUES (?, ?, ?, 'Dorper', 'Blanco', 'FEMALE', ?, ?, ?, 'LAMB_LACTATING', 'EMPTY', ?)
+                VALUES (?, ?, ?, 'Dorper', 'Blanco', 'FEMALE', ?, ?, ?, ?, 'EMPTY', ?)
             """.trimIndent(),
-            parameters = 7,
+            parameters = 8,
         ) {
             bindString(0, id)
             bindString(1, ranch)
@@ -99,7 +109,8 @@ class PendingWeaningsUseCaseTest {
             bindString(3, birth)
             bindString(4, weaningDate)
             bindString(5, mortalityDate)
-            bindString(6, status)
+            bindString(6, stage)
+            bindString(7, status)
         }
     }
 }
