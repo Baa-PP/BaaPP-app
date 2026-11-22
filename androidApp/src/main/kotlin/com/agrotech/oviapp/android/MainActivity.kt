@@ -85,12 +85,13 @@ class MainActivity : ComponentActivity() {
                             val sessionStorage = AndroidEncryptedSessionStorage(applicationContext)
                             val authService = KtorAuthService()
                             val repository = AuthRepository(authService, sessionStorage)
-                            val driverFactory = DatabaseDriverFactory(applicationContext)
-                            val database = createDatabase(driverFactory)
-                            val inventoryRepo = SqlDelightAnimalInventoryRepository(database)
 
                             var publicationKept = false
                             try {
+                                val driverFactory = DatabaseDriverFactory(applicationContext)
+                                val database = createDatabase(driverFactory)
+                                val inventoryRepo = SqlDelightAnimalInventoryRepository(database)
+
                                 val cachedSession = repository.getCachedSession()
                                 val published = publishOrClose(repository)
                                 if (published) {
@@ -291,9 +292,10 @@ fun AppNavigation(
     val scope = rememberCoroutineScope()
 
     if (session != null) {
-        if (showingInventory) {
+        val currentRanchId = session?.ranchId
+        if (showingInventory && !currentRanchId.isNullOrBlank()) {
             InventoryScreen(
-                ranchId = session?.ranchId ?: "default-ranch",
+                ranchId = currentRanchId,
                 inventoryRepository = inventoryRepository,
                 onBackClick = { showingInventory = false }
             )
@@ -307,7 +309,9 @@ fun AppNavigation(
                     errorMessage = null
                 },
                 onOpenInventoryClick = {
-                    showingInventory = true
+                    if (!session?.ranchId.isNullOrBlank()) {
+                        showingInventory = true
+                    }
                 }
             )
         }

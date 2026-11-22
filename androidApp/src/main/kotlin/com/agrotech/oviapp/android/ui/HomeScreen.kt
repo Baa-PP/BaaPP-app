@@ -201,7 +201,13 @@ fun HomeScreen(
                         ) {
                             if (capabilities.canReadInventory) {
                                 OutlinedButton(
-                                    onClick = onOpenInventoryClick,
+                                    onClick = {
+                                        if (session.ranchId.isNullOrBlank()) {
+                                            showUpcomingNotice("No tienes un rancho asignado para consultar inventario.")
+                                        } else {
+                                            onOpenInventoryClick()
+                                        }
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .heightIn(min = 56.dp),

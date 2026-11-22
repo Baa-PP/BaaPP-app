@@ -76,6 +76,23 @@ private val BaappFemalePinkBg = Color(0xFFFCE4EC)
 private val BaappMaleBlue = Color(0xFF1565C0)
 private val BaappMaleBlueBg = Color(0xFFE3F2FD)
 
+private data class PaginationTag(
+    val tab: InventoryTab,
+    val query: String,
+    val reproductiveStatus: ReproductiveStatus?,
+    val lifeStage: LifeStage?
+) {
+    fun matches(
+        currentTab: InventoryTab,
+        currentQuery: String,
+        currentReproductiveStatus: ReproductiveStatus?,
+        currentLifeStage: LifeStage?
+    ): Boolean = tab == currentTab &&
+        query == currentQuery &&
+        reproductiveStatus == currentReproductiveStatus &&
+        lifeStage == currentLifeStage
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun InventoryScreen(
@@ -149,15 +166,18 @@ fun InventoryScreen(
     }
 
     // Infinite scroll listener
-    LaunchedEffect(listState) {
+    LaunchedEffect(listState, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage) {
+        val requestTag = PaginationTag(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val totalItems = layoutInfo.totalItemsCount
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible >= totalItems - 5 && totalItems > 0
+            val nearBottom = lastVisible >= totalItems - 5 && totalItems > 0
+            nearBottom && canLoadMore && !isLoading
         }.distinctUntilChanged().collect { shouldLoadMore ->
             if (shouldLoadMore && canLoadMore && !isLoading) {
                 isLoading = true
+                val fetchOffset = currentOffset
                 when (currentTab) {
                     InventoryTab.EWES -> {
                         val more = inventoryRepository.getEwesPaged(
@@ -165,20 +185,26 @@ fun InventoryScreen(
                             query = searchQuery,
                             reproductiveStatus = selectedReproductiveStatus,
                             limit = pageSize,
-                            offset = currentOffset
+                            offset = fetchOffset
                         )
-                        ewesList = ewesList + more
-                        canLoadMore = more.size.toLong() == pageSize
+                        if (requestTag.matches(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
+                            ewesList = ewesList + more
+                            canLoadMore = more.size.toLong() == pageSize
+                            currentOffset = fetchOffset + pageSize
+                        }
                     }
                     InventoryTab.RAMS -> {
                         val more = inventoryRepository.getRamsPaged(
                             ranchId = ranchId,
                             query = searchQuery,
                             limit = pageSize,
-                            offset = currentOffset
+                            offset = fetchOffset
                         )
-                        ramsList = ramsList + more
-                        canLoadMore = more.size.toLong() == pageSize
+                        if (requestTag.matches(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
+                            ramsList = ramsList + more
+                            canLoadMore = more.size.toLong() == pageSize
+                            currentOffset = fetchOffset + pageSize
+                        }
                     }
                     InventoryTab.LAMBS -> {
                         val more = inventoryRepository.getLambsPaged(
@@ -186,13 +212,15 @@ fun InventoryScreen(
                             query = searchQuery,
                             lifeStage = selectedLifeStage,
                             limit = pageSize,
-                            offset = currentOffset
+                            offset = fetchOffset
                         )
-                        lambsList = lambsList + more
-                        canLoadMore = more.size.toLong() == pageSize
+                        if (requestTag.matches(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
+                            lambsList = lambsList + more
+                            canLoadMore = more.size.toLong() == pageSize
+                            currentOffset = fetchOffset + pageSize
+                        }
                     }
                 }
-                currentOffset += pageSize
                 isLoading = false
             }
         }

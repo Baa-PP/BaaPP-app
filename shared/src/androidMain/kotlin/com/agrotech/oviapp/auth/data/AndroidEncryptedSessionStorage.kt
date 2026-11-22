@@ -44,10 +44,14 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
     override fun updateSessionIfMatches(
         expectedSessionId: String,
         expectedRefreshToken: String?,
+        expectedAccessToken: String?,
         transform: (AuthSession) -> AuthSession
     ): Boolean = synchronized(lock) {
         val current = readSessionLocked() ?: return false
-        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+        if (current.sessionId != expectedSessionId ||
+            current.refreshToken != expectedRefreshToken ||
+            (expectedAccessToken != null && current.accessToken != expectedAccessToken)
+        ) {
             return false
         }
         writeSessionLocked(transform(current))
@@ -56,10 +60,14 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
 
     override fun clearSessionIfMatches(
         expectedSessionId: String,
-        expectedRefreshToken: String?
+        expectedRefreshToken: String?,
+        expectedAccessToken: String?
     ): Boolean = synchronized(lock) {
         val current = readSessionLocked() ?: return false
-        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+        if (current.sessionId != expectedSessionId ||
+            current.refreshToken != expectedRefreshToken ||
+            (expectedAccessToken != null && current.accessToken != expectedAccessToken)
+        ) {
             return false
         }
         prefs.edit().clear().apply()
