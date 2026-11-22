@@ -144,6 +144,24 @@ class DisposeAnimalUseCaseTest {
         assertEquals(1, queue.pendingCount())
     }
 
+    @Test
+    fun aDisposalThatLostARaceIsNotQueued() {
+        // Otra baja ganó la carrera entre la lectura y la escritura: su UPDATE con guarda ya no cambia nada.
+        driver.execute(
+            null,
+            "CREATE TRIGGER lost_race BEFORE UPDATE ON local_animals WHEN OLD.id = 'lamb' BEGIN SELECT RAISE(IGNORE); END",
+            0,
+        )
+
+        assertEquals(listOf(DisposalError.ANIMAL_NOT_ACTIVE), errors(useCase.recordSale("lamb")))
+        assertEquals(
+            listOf(DisposalError.ANIMAL_NOT_ACTIVE),
+            errors(useCase.recordDeath("lamb", MortalityInput(LocalDate(2026, 11, 20), "Frío"))),
+        )
+        // Sin evento: un payload viejo no puede pisar en el servidor la baja que sí ganó.
+        assertEquals(0, queue.pendingCount())
+    }
+
     private fun errors(result: DisposalResult) = assertIs<DisposalResult.Rejected>(result).errors
 
     private fun animal(id: String) = database.oviAppDatabaseQueries.selectAnimalById(id).executeAsOne()

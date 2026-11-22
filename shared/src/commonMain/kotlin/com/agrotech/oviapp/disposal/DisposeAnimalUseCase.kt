@@ -100,18 +100,16 @@ class DisposeAnimalUseCase(
             mortality_cause = cause,
             life_stage_at_death = stageAtDeath.name,
         )
-        save(updated) {
+        return save(updated) {
             queries.markAnimalDeceased(updated.mortality_date, cause, stageAtDeath.name, now(), animal.id)
         }
-        return DisposalResult.Done
     }
 
     fun recordSale(animalId: String): DisposalResult {
         val animal = queries.selectAnimalById(animalId).executeAsOneOrNull() ?: return DisposalResult.AnimalNotFound
         if (animal.status != AnimalStatus.ACTIVE.name) return DisposalResult.Rejected(listOf(DisposalError.ANIMAL_NOT_ACTIVE))
 
-        save(animal.copy(status = AnimalStatus.SOLD.name)) { queries.markAnimalSold(now(), animal.id) }
-        return DisposalResult.Done
+        return save(animal.copy(status = AnimalStatus.SOLD.name)) { queries.markAnimalSold(now(), animal.id) }
     }
 
     fun mortalitySummary(ranchId: String, from: LocalDate, to: LocalDate): List<MortalitySummaryRow> =
@@ -123,13 +121,21 @@ class DisposeAnimalUseCase(
             )
         }
 
-    private fun save(updated: Local_animals, write: () -> Unit) {
-        queue.writeAndEnqueue(
+    /**
+     * Las consultas de baja tienen guarda `status = 'ACTIVE'`. Si otra baja ganó la carrera entre la lectura
+     * y esta escritura, el UPDATE no cambia nada y no se encola el evento: su payload viejo pisaría en el
+     * servidor la baja que sí se guardó.
+     */
+    private fun save(updated: Local_animals, write: () -> Unit): DisposalResult {
+        val mutation = queue.writeAndEnqueueIfChanged(
             entityType = SyncEntityType.ANIMAL,
             operation = SyncOperation.UPDATE,
             payloadJson = json.encodeToString(updated.toPayload()),
-            write = write,
-        )
+        ) {
+            write()
+            queue.changedRows()
+        }
+        return if (mutation == null) DisposalResult.Rejected(listOf(DisposalError.ANIMAL_NOT_ACTIVE)) else DisposalResult.Done
     }
 
     private fun Local_animals.toPayload() = AnimalUpdatePayload(
