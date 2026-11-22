@@ -57,6 +57,7 @@ private val BaappWarningText = Color(0xFF8D6E00)
 fun HomeScreen(
     session: AuthSession,
     onLogoutClick: () -> Unit,
+    onOpenInventoryClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -200,7 +201,7 @@ fun HomeScreen(
                         ) {
                             if (capabilities.canReadInventory) {
                                 OutlinedButton(
-                                    onClick = { showUpcomingNotice("Consulta de inventario disponible en APP-06") },
+                                    onClick = onOpenInventoryClick,
                                     modifier = Modifier
                                         .weight(1f)
                                         .heightIn(min = 56.dp),

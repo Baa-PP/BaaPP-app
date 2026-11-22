@@ -36,11 +36,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.android.ui.HomeScreen
+import com.agrotech.oviapp.android.ui.InventoryScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
+import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
+import com.agrotech.oviapp.animals.domain.repository.AnimalInventoryRepository
 import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
+import com.agrotech.oviapp.db.DatabaseDriverFactory
+import com.agrotech.oviapp.db.createDatabase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -80,6 +85,9 @@ class MainActivity : ComponentActivity() {
                             val sessionStorage = AndroidEncryptedSessionStorage(applicationContext)
                             val authService = KtorAuthService()
                             val repository = AuthRepository(authService, sessionStorage)
+                            val driverFactory = DatabaseDriverFactory(applicationContext)
+                            val database = createDatabase(driverFactory)
+                            val inventoryRepo = SqlDelightAnimalInventoryRepository(database)
 
                             var publicationKept = false
                             try {
@@ -87,7 +95,7 @@ class MainActivity : ComponentActivity() {
                                 val published = publishOrClose(repository)
                                 if (published) {
                                     publicationKept = true
-                                    repository to cachedSession
+                                    Triple(repository, inventoryRepo, cachedSession)
                                 } else {
                                     null
                                 }
@@ -118,13 +126,17 @@ class MainActivity : ComponentActivity() {
 
 private sealed interface InitialState {
     data object Loading : InitialState
-    data class Ready(val repository: AuthRepository, val cachedSession: AuthSession?) : InitialState
+    data class Ready(
+        val repository: AuthRepository,
+        val inventoryRepository: AnimalInventoryRepository,
+        val cachedSession: AuthSession?
+    ) : InitialState
     data class Error(val message: String) : InitialState
 }
 
 @Composable
 private fun MainApp(
-    onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>?,
+    onInitRepository: suspend () -> Triple<AuthRepository, AnimalInventoryRepository, AuthSession?>?,
     onResetStorage: suspend () -> Boolean
 ) {
     var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
@@ -139,7 +151,7 @@ private fun MainApp(
                 onInitRepository()
             }
             if (result != null) {
-                state = InitialState.Ready(result.first, result.second)
+                state = InitialState.Ready(result.first, result.second, result.third)
             }
         } catch (e: CancellationException) {
             throw e
@@ -170,6 +182,7 @@ private fun MainApp(
         is InitialState.Ready -> {
             AppNavigation(
                 authRepository = current.repository,
+                inventoryRepository = current.inventoryRepository,
                 initialSession = current.cachedSession
             )
         }
@@ -268,22 +281,36 @@ private fun MainApp(
 @Composable
 fun AppNavigation(
     authRepository: AuthRepository,
+    inventoryRepository: AnimalInventoryRepository,
     initialSession: AuthSession?
 ) {
     var session by remember { mutableStateOf<AuthSession?>(initialSession) }
+    var showingInventory by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     if (session != null) {
-        HomeScreen(
-            session = session!!,
-            onLogoutClick = {
-                authRepository.logout()
-                session = null
-                errorMessage = null
-            }
-        )
+        if (showingInventory) {
+            InventoryScreen(
+                ranchId = session?.ranchId ?: "default-ranch",
+                inventoryRepository = inventoryRepository,
+                onBackClick = { showingInventory = false }
+            )
+        } else {
+            HomeScreen(
+                session = session!!,
+                onLogoutClick = {
+                    authRepository.logout()
+                    session = null
+                    showingInventory = false
+                    errorMessage = null
+                },
+                onOpenInventoryClick = {
+                    showingInventory = true
+                }
+            )
+        }
     } else {
         LoginScreen(
             isLoading = isLoading,

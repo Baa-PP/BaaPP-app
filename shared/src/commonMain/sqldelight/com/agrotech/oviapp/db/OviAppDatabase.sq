@@ -110,9 +110,71 @@ WHERE ranch_id = :ranchId AND sex = :sex AND status = 'ACTIVE'
 ORDER BY folio_interno ASC
 LIMIT :limit OFFSET :offset;
 
+selectEwesFilteredPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId
+  AND sex = 'FEMALE'
+  AND life_stage = 'ADULT'
+  AND status = 'ACTIVE'
+  AND (:reproductiveStatus IS NULL OR reproductive_status = :reproductiveStatus)
+  AND (
+    :query = '' OR
+    folio_interno LIKE ('%' || :query || '%') OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+  )
+ORDER BY folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
+selectRamsWithMetricsPaged:
+SELECT
+    a.*,
+    (
+        SELECT wm.scrotal_circumference_cm
+        FROM local_weight_measurements wm
+        WHERE wm.animal_id = a.id AND wm.scrotal_circumference_cm IS NOT NULL
+        ORDER BY wm.measurement_date DESC
+        LIMIT 1
+    ) AS latest_scrotal_circumference_cm,
+    (
+        SELECT COUNT(*)
+        FROM local_animals c
+        WHERE c.sire_id = a.id AND c.status != 'DECEASED'
+    ) AS active_offspring_count,
+    (
+        SELECT COUNT(*)
+        FROM local_animals c
+        WHERE c.sire_id = a.id
+    ) AS total_offspring_count
+FROM local_animals a
+WHERE a.ranch_id = :ranchId
+  AND a.sex = 'MALE'
+  AND a.life_stage = 'ADULT'
+  AND a.status = 'ACTIVE'
+  AND (
+    :query = '' OR
+    a.folio_interno LIKE ('%' || :query || '%') OR
+    (a.siniiga_chip IS NOT NULL AND a.siniiga_chip LIKE ('%' || :query || '%'))
+  )
+ORDER BY a.folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
 selectLambsPaged:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND status = 'ACTIVE' AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+ORDER BY birth_date DESC
+LIMIT :limit OFFSET :offset;
+
+selectLambsFilteredPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId
+  AND status = 'ACTIVE'
+  AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+  AND (:lifeStage IS NULL OR life_stage = :lifeStage)
+  AND (
+    :query = '' OR
+    folio_interno LIKE ('%' || :query || '%') OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+  )
 ORDER BY birth_date DESC
 LIMIT :limit OFFSET :offset;
 
