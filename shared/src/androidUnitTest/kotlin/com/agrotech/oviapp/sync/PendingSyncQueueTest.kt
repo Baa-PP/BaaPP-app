@@ -108,6 +108,27 @@ class PendingSyncQueueTest {
     }
 
     @Test
+    fun changedRowsReportsWhatTheLastGuardedUpdateDid() {
+        insertWeight("w1")
+        val queries = database.oviAppDatabaseQueries
+
+        val hit = queue.writeAndEnqueueIfChanged(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {
+            queries.markSyncEventCompleted("no-existe")
+            queue.changedRows()
+        }
+
+        assertNull(hit, "un UPDATE que no encontró fila no encola nada")
+        assertEquals(0L, queue.pendingCount())
+
+        val existing = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+        val updated = queue.writeAndEnqueueIfChanged(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {
+            queries.markSyncEventCompleted(existing.mutationId)
+            queue.changedRows()
+        }
+        assertEquals(listOf(updated!!.mutationId), queue.pending().map { it.mutationId })
+    }
+
+    @Test
     fun syncedMutationsLeaveThePendingQueue() {
         val a = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
         nowMillis += 1

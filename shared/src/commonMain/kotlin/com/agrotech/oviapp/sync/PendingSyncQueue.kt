@@ -56,6 +56,12 @@ class PendingSyncQueue(
         if (write() == 0L) null else enqueue(entityType, operation, payloadJson, localPhotoPath)
     }
 
+    /**
+     * Filas que cambió la última escritura en esta conexión; los UPDATE de SQLDelight no lo devuelven.
+     * Se usa dentro del bloque de [writeAndEnqueueIfChanged], justo después del UPDATE con guarda.
+     */
+    fun changedRows(): Long = queries.changedRows().executeAsOne()
+
     private fun enqueue(
         entityType: SyncEntityType,
         operation: SyncOperation,
