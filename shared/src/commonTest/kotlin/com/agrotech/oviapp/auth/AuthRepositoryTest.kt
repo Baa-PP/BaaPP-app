@@ -8,8 +8,17 @@ import com.agrotech.oviapp.auth.data.UserDto
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.auth.domain.SessionStorage
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -59,6 +68,27 @@ class FakeAuthService(
 }
 
 class AuthRepositoryTest {
+
+    private fun createMockHttpClient(
+        responseJson: String,
+        status: HttpStatusCode = HttpStatusCode.OK
+    ): HttpClient {
+        return HttpClient(MockEngine { _ ->
+            respond(
+                content = responseJson,
+                status = status,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }) {
+            install(ContentNegotiation) {
+                json(Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                    coerceInputValues = true
+                })
+            }
+        }
+    }
 
     @Test
     fun testLoginSuccessSavesSessionInStorage() = runTest {
@@ -171,17 +201,29 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun testBlankOrWhitespaceTokenValidation() {
-        val emptyTokenResponse = LoginResponse(accessToken = "")
-        val whitespaceTokenResponse = LoginResponse(accessToken = "   ")
-        val validTokenResponse = LoginResponse(accessToken = "valid-token")
+    fun testKtorAuthServiceLoginTokenRejection() = runTest {
+        // 1. Empty token response produces AuthServerException
+        val emptyClient = createMockHttpClient("""{"accessToken":""}""")
+        val emptyService = KtorAuthService(baseUrl = KtorAuthService.DEFAULT_BASE_URL, client = emptyClient)
+        assertFailsWith<AuthServerException> {
+            emptyService.login("user", "pass")
+        }
 
-        val token1 = emptyTokenResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
-        val token2 = whitespaceTokenResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
-        val token3 = validTokenResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
+        // 2. Whitespace-only token response produces AuthServerException
+        val whitespaceClient = createMockHttpClient("""{"accessToken":"   "}""")
+        val whitespaceService = KtorAuthService(baseUrl = KtorAuthService.DEFAULT_BASE_URL, client = whitespaceClient)
+        assertFailsWith<AuthServerException> {
+            whitespaceService.login("user", "pass")
+        }
 
-        assertNull(token1)
-        assertNull(token2)
-        assertEquals("valid-token", token3)
+        // 3. Valid nonblank token response is accepted
+        val validClient = createMockHttpClient(
+            """{"accessToken":"valid-jwt-token","role":"OWNER","ranchId":"ranch-1"}"""
+        )
+        val validService = KtorAuthService(baseUrl = KtorAuthService.DEFAULT_BASE_URL, client = validClient)
+        val session = validService.login("user", "pass")
+        assertEquals("valid-jwt-token", session.accessToken)
+        assertEquals("OWNER", session.role)
+        assertEquals("ranch-1", session.ranchId)
     }
 }

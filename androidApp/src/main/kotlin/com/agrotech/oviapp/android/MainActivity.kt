@@ -35,7 +35,24 @@ private val BaappPrimaryGreen = Color(0xFF1B5E20)
 
 class MainActivity : ComponentActivity() {
 
-    private var authRepository: AuthRepository? = null
+    private val repositoryLock = Any()
+    private var isDestroyed = false
+    private var activeRepository: AuthRepository? = null
+
+    /**
+     * Synchronizes repository ownership between initialization and destruction.
+     * If destruction occurred before publication, closes the repository immediately.
+     */
+    private fun publishOrClose(repository: AuthRepository): Boolean {
+        synchronized(repositoryLock) {
+            if (isDestroyed) {
+                repository.close()
+                return false
+            }
+            activeRepository = repository
+            return true
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,10 +65,22 @@ class MainActivity : ComponentActivity() {
                             val sessionStorage = AndroidEncryptedSessionStorage(applicationContext)
                             val authService = KtorAuthService()
                             val repository = AuthRepository(authService, sessionStorage)
-                            authRepository = repository
 
-                            val cachedSession = repository.getCachedSession()
-                            repository to cachedSession
+                            var publicationKept = false
+                            try {
+                                val cachedSession = repository.getCachedSession()
+                                val published = publishOrClose(repository)
+                                if (published) {
+                                    publicationKept = true
+                                    repository to cachedSession
+                                } else {
+                                    null
+                                }
+                            } finally {
+                                if (!publicationKept) {
+                                    repository.close()
+                                }
+                            }
                         }
                     )
                 }
@@ -61,7 +90,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        authRepository?.close()
+        val repositoryToClose = synchronized(repositoryLock) {
+            isDestroyed = true
+            activeRepository.also { activeRepository = null }
+        }
+        repositoryToClose?.close()
     }
 }
 
@@ -72,15 +105,17 @@ private sealed interface InitialState {
 
 @Composable
 private fun MainApp(
-    onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>
+    onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>?
 ) {
     var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
 
     LaunchedEffect(Unit) {
-        val (repo, cachedSession) = withContext(Dispatchers.IO) {
+        val result = withContext(Dispatchers.IO) {
             onInitRepository()
         }
-        state = InitialState.Ready(repo, cachedSession)
+        if (result != null) {
+            state = InitialState.Ready(result.first, result.second)
+        }
     }
 
     when (val current = state) {

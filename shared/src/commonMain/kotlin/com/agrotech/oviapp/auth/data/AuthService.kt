@@ -26,6 +26,7 @@ class KtorAuthService internal constructor(
 ) : AuthService {
 
     constructor(baseUrl: String = DEFAULT_BASE_URL) : this(baseUrl, createDefaultHttpClient())
+    internal constructor(client: HttpClient) : this(DEFAULT_BASE_URL, client)
 
     init {
         enforceHttps(baseUrl)
