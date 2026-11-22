@@ -35,10 +35,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.agrotech.oviapp.android.ui.AnimalFormScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.InventoryScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
+import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
+import com.agrotech.oviapp.animals.domain.repository.AnimalCommandRepository
 import com.agrotech.oviapp.animals.domain.repository.AnimalInventoryRepository
 import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
@@ -91,12 +94,13 @@ class MainActivity : ComponentActivity() {
                                 val driverFactory = DatabaseDriverFactory(applicationContext)
                                 val database = createDatabase(driverFactory)
                                 val inventoryRepo = SqlDelightAnimalInventoryRepository(database)
+                                val commandRepo = SqlDelightAnimalCommandRepository(database)
 
                                 val cachedSession = repository.getCachedSession()
                                 val published = publishOrClose(repository)
                                 if (published) {
                                     publicationKept = true
-                                    Triple(repository, inventoryRepo, cachedSession)
+                                    AppDependencies(repository, inventoryRepo, commandRepo, cachedSession)
                                 } else {
                                     null
                                 }
@@ -125,19 +129,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private data class AppDependencies(
+    val authRepository: AuthRepository,
+    val inventoryRepository: AnimalInventoryRepository,
+    val commandRepository: AnimalCommandRepository,
+    val cachedSession: AuthSession?
+)
+
 private sealed interface InitialState {
     data object Loading : InitialState
     data class Ready(
-        val repository: AuthRepository,
-        val inventoryRepository: AnimalInventoryRepository,
-        val cachedSession: AuthSession?
+        val dependencies: AppDependencies
     ) : InitialState
     data class Error(val message: String) : InitialState
 }
 
 @Composable
 private fun MainApp(
-    onInitRepository: suspend () -> Triple<AuthRepository, AnimalInventoryRepository, AuthSession?>?,
+    onInitRepository: suspend () -> AppDependencies?,
     onResetStorage: suspend () -> Boolean
 ) {
     var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
@@ -152,7 +161,7 @@ private fun MainApp(
                 onInitRepository()
             }
             if (result != null) {
-                state = InitialState.Ready(result.first, result.second, result.third)
+                state = InitialState.Ready(result)
             }
         } catch (e: CancellationException) {
             throw e
@@ -182,9 +191,10 @@ private fun MainApp(
         }
         is InitialState.Ready -> {
             AppNavigation(
-                authRepository = current.repository,
-                inventoryRepository = current.inventoryRepository,
-                initialSession = current.cachedSession
+                authRepository = current.dependencies.authRepository,
+                inventoryRepository = current.dependencies.inventoryRepository,
+                commandRepository = current.dependencies.commandRepository,
+                initialSession = current.dependencies.cachedSession
             )
         }
         is InitialState.Error -> {
@@ -279,41 +289,72 @@ private fun MainApp(
     }
 }
 
+private sealed interface AppScreen {
+    data object Home : AppScreen
+    data object Inventory : AppScreen
+    data class AnimalForm(val animalId: String? = null) : AppScreen
+}
+
 @Composable
 fun AppNavigation(
     authRepository: AuthRepository,
     inventoryRepository: AnimalInventoryRepository,
+    commandRepository: AnimalCommandRepository,
     initialSession: AuthSession?
 ) {
     var session by remember { mutableStateOf<AuthSession?>(initialSession) }
-    var showingInventory by remember { mutableStateOf(false) }
+    var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     if (session != null) {
         val currentRanchId = session?.ranchId
-        if (showingInventory && !currentRanchId.isNullOrBlank()) {
-            InventoryScreen(
-                ranchId = currentRanchId,
-                inventoryRepository = inventoryRepository,
-                onBackClick = { showingInventory = false }
-            )
-        } else {
-            HomeScreen(
-                session = session!!,
-                onLogoutClick = {
-                    authRepository.logout()
-                    session = null
-                    showingInventory = false
-                    errorMessage = null
-                },
-                onOpenInventoryClick = {
-                    if (!session?.ranchId.isNullOrBlank()) {
-                        showingInventory = true
-                    }
+        when (val screen = currentScreen) {
+            is AppScreen.Inventory -> {
+                if (!currentRanchId.isNullOrBlank()) {
+                    InventoryScreen(
+                        ranchId = currentRanchId,
+                        inventoryRepository = inventoryRepository,
+                        onBackClick = { currentScreen = AppScreen.Home }
+                    )
+                } else {
+                    currentScreen = AppScreen.Home
                 }
-            )
+            }
+            is AppScreen.AnimalForm -> {
+                if (!currentRanchId.isNullOrBlank()) {
+                    AnimalFormScreen(
+                        ranchId = currentRanchId,
+                        animalIdToEdit = screen.animalId,
+                        commandRepository = commandRepository,
+                        onNavigateBack = { currentScreen = AppScreen.Home }
+                    )
+                } else {
+                    currentScreen = AppScreen.Home
+                }
+            }
+            is AppScreen.Home -> {
+                HomeScreen(
+                    session = session!!,
+                    onLogoutClick = {
+                        authRepository.logout()
+                        session = null
+                        currentScreen = AppScreen.Home
+                        errorMessage = null
+                    },
+                    onOpenInventoryClick = {
+                        if (!session?.ranchId.isNullOrBlank()) {
+                            currentScreen = AppScreen.Inventory
+                        }
+                    },
+                    onOpenRegisterAnimalClick = {
+                        if (!session?.ranchId.isNullOrBlank()) {
+                            currentScreen = AppScreen.AnimalForm(animalId = null)
+                        }
+                    }
+                )
+            }
         }
     } else {
         LoginScreen(

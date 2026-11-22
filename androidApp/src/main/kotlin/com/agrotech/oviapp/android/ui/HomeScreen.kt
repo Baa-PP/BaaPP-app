@@ -58,6 +58,7 @@ fun HomeScreen(
     session: AuthSession,
     onLogoutClick: () -> Unit,
     onOpenInventoryClick: () -> Unit = {},
+    onOpenRegisterAnimalClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -219,7 +220,13 @@ fun HomeScreen(
 
                             if (capabilities.canCapture) {
                                 Button(
-                                    onClick = { showUpcomingNotice("Alta de ejemplar disponible en APP-06") },
+                                    onClick = {
+                                        if (session.ranchId.isNullOrBlank()) {
+                                            showUpcomingNotice("No tienes un rancho asignado para registrar ejemplares.")
+                                        } else {
+                                            onOpenRegisterAnimalClick()
+                                        }
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .heightIn(min = 56.dp),

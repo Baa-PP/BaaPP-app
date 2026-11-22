@@ -86,6 +86,15 @@ CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
 CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
 
+insertPendingSyncEvent:
+INSERT INTO pending_sync_events (
+    mutation_id, entity_type, operation, occurred_at,
+    payload_json, local_photo_path, sync_status
+) VALUES (
+    ?, ?, ?, ?,
+    ?, ?, ?
+);
+
 -- Queries: sync
 selectPendingSyncEvents:
 SELECT * FROM pending_sync_events
