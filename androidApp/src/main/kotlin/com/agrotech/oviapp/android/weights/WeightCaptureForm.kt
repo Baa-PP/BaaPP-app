@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -43,12 +44,15 @@ fun WeightCaptureForm(
     onSave: (WeightInput) -> RecordWeightResult,
     modifier: Modifier = Modifier,
 ) {
-    var milestone by remember { mutableStateOf(WeightMilestone.EVALUATION) }
-    var weight by remember { mutableStateOf("") }
-    var scrotal by remember { mutableStateOf("") }
-    var dateText by remember { mutableStateOf(Clock.System.todayIn(TimeZone.currentSystemDefault()).toString()) }
-    var result by remember { mutableStateOf<RecordWeightResult?>(null) }
-    var invalidDate by remember { mutableStateOf(false) }
+    // El borrador sobrevive a que Android recree la Activity (rotación, falta de memoria) y es por animal.
+    var milestone by rememberSaveable(animal.id) { mutableStateOf(WeightMilestone.EVALUATION) }
+    var weight by rememberSaveable(animal.id) { mutableStateOf("") }
+    var scrotal by rememberSaveable(animal.id) { mutableStateOf("") }
+    var dateText by rememberSaveable(animal.id) {
+        mutableStateOf(Clock.System.todayIn(TimeZone.currentSystemDefault()).toString())
+    }
+    var result by remember(animal.id) { mutableStateOf<RecordWeightResult?>(null) }
+    var invalidDate by rememberSaveable(animal.id) { mutableStateOf(false) }
     val showScrotal = WeightRules.scrotalCircumferenceAvailable(animal.sex)
     val errors = (result as? RecordWeightResult.Rejected)?.errors.orEmpty()
 
