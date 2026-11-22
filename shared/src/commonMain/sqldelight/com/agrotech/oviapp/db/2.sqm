@@ -1,2 +1,5 @@
--- Migration v2 -> v3: APP-19 etapa al morir (espejo de animales.etapa_al_morir del backend)
-ALTER TABLE local_animals ADD COLUMN life_stage_at_death TEXT;
+-- Migration v2 -> v3: orden FIFO de la cola de salida (APP-20).
+-- Las mutaciones que ya estaban en cola conservan su orden de inserción (rowid).
+ALTER TABLE pending_sync_events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0;
+UPDATE pending_sync_events SET sequence = rowid;
+CREATE INDEX idx_pending_sync_events_status_sequence ON pending_sync_events (sync_status, sequence);

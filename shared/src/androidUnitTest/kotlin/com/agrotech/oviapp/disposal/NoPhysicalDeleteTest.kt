@@ -26,11 +26,11 @@ class NoPhysicalDeleteTest {
     @Test
     fun migrationAddsTheStageAtDeathColumnWithoutLosingRows() {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
-        // Tabla tal como quedó en la versión 2 (después de 1.sqm), con un animal ya guardado.
+        // Tabla tal como quedó en la versión 3 (antes de 3.sqm), con un animal ya guardado.
         driver.execute(null, "CREATE TABLE local_animals (id TEXT NOT NULL PRIMARY KEY, mortality_cause TEXT)", 0)
         driver.execute(null, "INSERT INTO local_animals (id) VALUES ('a1')", 0)
 
-        OviAppDatabase.Schema.migrate(driver, oldVersion = 2, newVersion = OviAppDatabase.Schema.version)
+        OviAppDatabase.Schema.migrate(driver, oldVersion = 3, newVersion = OviAppDatabase.Schema.version)
         driver.execute(null, "UPDATE local_animals SET life_stage_at_death = 'ADULT' WHERE id = 'a1'", 0)
 
         val stage = driver.executeQuery(
@@ -39,7 +39,7 @@ class NoPhysicalDeleteTest {
             mapper = { cursor -> app.cash.sqldelight.db.QueryResult.Value(if (cursor.next().value) cursor.getString(0) else null) },
             parameters = 0,
         ).value
-        assertEquals(3, OviAppDatabase.Schema.version)
+        assertEquals(4, OviAppDatabase.Schema.version)
         assertEquals("ADULT", stage)
         driver.close()
     }

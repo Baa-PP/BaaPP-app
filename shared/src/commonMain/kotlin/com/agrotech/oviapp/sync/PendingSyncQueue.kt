@@ -38,6 +38,36 @@ class PendingSyncQueue(
         write: () -> Unit,
     ): PendingMutation = database.transactionWithResult {
         write()
+        enqueue(entityType, operation, payloadJson, localPhotoPath)
+    }
+
+    /**
+     * Como [writeAndEnqueue], pero [write] devuelve cuántas filas cambió y la mutación solo se encola si
+     * cambió alguna. Sirve para escrituras con guarda (p. ej. `WHERE status = 'ACTIVE'`): si otra escritura
+     * ganó la carrera, no se manda al servidor un payload viejo que la pisaría. Devuelve null si no cambió nada.
+     */
+    fun writeAndEnqueueIfChanged(
+        entityType: SyncEntityType,
+        operation: SyncOperation,
+        payloadJson: String,
+        localPhotoPath: String? = null,
+        write: () -> Long,
+    ): PendingMutation? = database.transactionWithResult {
+        if (write() == 0L) null else enqueue(entityType, operation, payloadJson, localPhotoPath)
+    }
+
+    /**
+     * Filas que cambió la última escritura en esta conexión; los UPDATE de SQLDelight no lo devuelven.
+     * Se usa dentro del bloque de [writeAndEnqueueIfChanged], justo después del UPDATE con guarda.
+     */
+    fun changedRows(): Long = queries.changedRows().executeAsOne()
+
+    private fun enqueue(
+        entityType: SyncEntityType,
+        operation: SyncOperation,
+        payloadJson: String,
+        localPhotoPath: String?,
+    ): PendingMutation {
         val mutation = PendingMutation(
             mutationId = newMutationId(),
             entityType = entityType,
@@ -54,10 +84,10 @@ class PendingSyncQueue(
             payload_json = mutation.payloadJson,
             local_photo_path = mutation.localPhotoPath,
         )
-        mutation
+        return mutation
     }
 
-    /** Mutaciones PENDING en orden cronológico (y por id UUIDv7 si ocurrieron en el mismo milisegundo). */
+    /** Mutaciones PENDING en orden FIFO: el orden en que se escribieron en este celular. */
     fun pending(): List<PendingMutation> =
         queries.selectPendingSyncEvents().executeAsList().map {
             PendingMutation(
