@@ -18,6 +18,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.android.notifications.WeaningNotifications
 import com.agrotech.oviapp.notifications.WeaningAlert
+import com.agrotech.oviapp.android.ui.theme.OviTheme
 
 class MainActivity : ComponentActivity() {
     private val openedAlert = mutableStateOf<WeaningAlert?>(null)
@@ -32,10 +33,10 @@ class MainActivity : ComponentActivity() {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            MaterialTheme {
+            OviTheme {
                 Surface {
                     Column(Modifier.padding(16.dp)) {
-                        Text("BaaPP (OviApp) — Captura Offline en Corral")
+                        Text("BaaPP (OviApp) — Captura Offline en Corral", style = MaterialTheme.typography.titleLarge)
                         openedAlert.value?.let { alert ->
                             // Hasta APP-16 no hay pantalla de destetes: se muestra qué animal abrió el aviso.
                             val folio = alert.folioInterno ?: stringResource(R.string.destete_sin_folio)
