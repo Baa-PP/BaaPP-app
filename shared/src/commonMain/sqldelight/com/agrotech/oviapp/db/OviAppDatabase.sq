@@ -129,17 +129,6 @@ selectAnimalById:
 SELECT * FROM local_animals
 WHERE id = :id;
 
--- APP-16: crías sin destetar para la lista de destetes (usa idx_local_animals_weaning_pending).
-selectUnweanedAnimals:
-SELECT id, folio_interno, sex, birth_date
-FROM local_animals
-WHERE ranch_id = :ranchId
-  AND status = 'ACTIVE'
-  AND weaning_date IS NULL
-  AND mortality_date IS NULL
-  AND birth_date <= :bornOnOrBefore
-ORDER BY birth_date, folio_interno;
-
 selectAnimalByFolio:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND folio_interno = :folioInterno;
@@ -253,3 +242,14 @@ INSERT OR REPLACE INTO local_weight_measurements (
     ?, ?, ?,
     ?, ?
 );
+
+-- APP-16: crías sin destetar para la lista de destetes (usa idx_local_animals_weaning_pending).
+selectUnweanedAnimals:
+SELECT id, folio_interno, sex, birth_date
+FROM local_animals
+WHERE ranch_id = :ranchId
+  AND status = 'ACTIVE'
+  AND weaning_date IS NULL
+  AND mortality_date IS NULL
+  AND birth_date <= :bornOnOrBefore
+ORDER BY birth_date, folio_interno;
