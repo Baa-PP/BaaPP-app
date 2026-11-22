@@ -18,6 +18,7 @@ import io.ktor.http.contentType
 import io.ktor.http.encodedPath
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
@@ -66,14 +67,22 @@ class TokenRefreshInterceptor(
             val isAuthEndpoint = request.url.encodedPath.contains("/auth/")
 
             // 1. Add credentials only if request matches baseUrl's origin and is not an auth endpoint.
-            // Strip HEADER_ACTIVE_RANCH_ID if a redirect carried it to a foreign origin.
+            // Strip HEADER_ACTIVE_RANCH_ID and provenance if a redirect carried them to a foreign origin.
             val capturedSession = if (matchesOrigin && !isAuthEndpoint) sessionStorage.getSession() else null
 
             if (!matchesOrigin) {
                 request.headers.remove(HEADER_ACTIVE_RANCH_ID)
+                request.attributes.remove(INJECTED_CREDENTIALS_KEY)
             } else if (!isAuthEndpoint && capturedSession != null) {
                 if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession.accessToken.isNotBlank()) {
                     request.header(HttpHeaders.Authorization, "Bearer ${capturedSession.accessToken}")
+                    request.attributes.put(
+                        INJECTED_CREDENTIALS_KEY,
+                        InjectedCredentials(
+                            sessionId = capturedSession.sessionId,
+                            accessToken = capturedSession.accessToken
+                        )
+                    )
                 }
                 if (!request.headers.contains(HEADER_ACTIVE_RANCH_ID) && !capturedSession.ranchId.isNullOrBlank()) {
                     request.header(HEADER_ACTIVE_RANCH_ID, capturedSession.ranchId)
@@ -88,30 +97,33 @@ class TokenRefreshInterceptor(
                 val tokenUsed = request.headers[HttpHeaders.Authorization]
                     ?.removePrefix("Bearer ")
                     ?.trim()
+                val provenance = request.attributes.getOrNull(INJECTED_CREDENTIALS_KEY)
+                val originSessionId = provenance?.sessionId ?: capturedSession?.sessionId
+                val originAccessToken = provenance?.accessToken ?: capturedSession?.accessToken
 
                 val refreshSucceeded = refreshMutex.withLock {
                     val currentSession = sessionStorage.getSession()
 
                     when {
-                        // No session or missing captured session
-                        capturedSession == null || currentSession == null -> {
+                        // No session or missing origin session
+                        originSessionId == null || originAccessToken == null || currentSession == null -> {
                             false
                         }
                         // Replacement account has taken over: do not replay request across accounts!
-                        currentSession.sessionId != capturedSession.sessionId -> {
+                        currentSession.sessionId != originSessionId -> {
                             false
                         }
-                        // Confirm the request's original credentials belonged to capturedSession
-                        tokenUsed != capturedSession.accessToken -> {
+                        // Confirm the request's original credentials belonged to the origin session
+                        tokenUsed != originAccessToken -> {
                             false
                         }
-                        // Token changed within the SAME session generation (concurrent refresh succeeded)
+                        // Token changed within the SAME session generation (concurrent refresh or redirect recovery)
                         currentSession.accessToken != tokenUsed && currentSession.accessToken.isNotBlank() -> {
                             true
                         }
                         // Stored refresh token is missing or blank
                         currentSession.refreshToken.isNullOrBlank() -> {
-                            sessionStorage.clearSessionIfMatchesGeneration(capturedSession.sessionId)
+                            sessionStorage.clearSessionIfMatchesGeneration(originSessionId)
                             false
                         }
                         // Need to call POST /api/v1/auth/refresh
@@ -124,12 +136,19 @@ class TokenRefreshInterceptor(
                 if (refreshSucceeded) {
                     val newSession = sessionStorage.getSession()
                     if (newSession != null &&
-                        capturedSession != null &&
-                        newSession.sessionId == capturedSession.sessionId &&
+                        originSessionId != null &&
+                        newSession.sessionId == originSessionId &&
                         newSession.accessToken.isNotBlank()
                     ) {
                         request.headers.remove(HttpHeaders.Authorization)
                         request.header(HttpHeaders.Authorization, "Bearer ${newSession.accessToken}")
+                        request.attributes.put(
+                            INJECTED_CREDENTIALS_KEY,
+                            InjectedCredentials(
+                                sessionId = newSession.sessionId,
+                                accessToken = newSession.accessToken
+                            )
+                        )
                         return@intercept execute(request)
                     }
                 }
@@ -195,8 +214,15 @@ class TokenRefreshInterceptor(
         refreshClient.close()
     }
 
+    private data class InjectedCredentials(
+        val sessionId: String,
+        val accessToken: String
+    )
+
     companion object {
         const val HEADER_ACTIVE_RANCH_ID = "X-Active-Ranch-Id"
+        private val INJECTED_CREDENTIALS_KEY =
+            AttributeKey<InjectedCredentials>("TokenRefreshInjectedCredentials")
 
         fun createDefaultRefreshClient(): HttpClient {
             return HttpClient {

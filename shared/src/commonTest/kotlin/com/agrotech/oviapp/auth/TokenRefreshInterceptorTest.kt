@@ -655,4 +655,78 @@ class TokenRefreshInterceptorTest {
         assertEquals("tok-2", storage.getSession()?.accessToken)
         assertEquals("sess-2", storage.getSession()?.sessionId)
     }
+
+    @Test
+    fun testSameOriginRedirectRecoversWithRefreshedTokenInSameGeneration() = runTest {
+        val storage = FakeSessionStorage()
+        storage.saveSession(
+            AuthSession(
+                accessToken = "old-token",
+                refreshToken = "ref-1",
+                username = "owner",
+                role = "OWNER",
+                ranchId = "ranch-1",
+                sessionId = "sess-1"
+            )
+        )
+
+        var refreshCalled = false
+        val observedTokensOnTarget = mutableListOf<String?>()
+
+        val apiEngine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/v1/redirect-me" -> {
+                    // Simulate a concurrent refresh completing before the redirect hop runs
+                    storage.saveSession(
+                        storage.getSession()!!.copy(accessToken = "refreshed-token")
+                    )
+                    respond(
+                        content = "",
+                        status = HttpStatusCode.Found,
+                        headers = headersOf(HttpHeaders.Location, "https://api.baapp.mx/api/v1/target")
+                    )
+                }
+                "/api/v1/target" -> {
+                    val auth = request.headers[HttpHeaders.Authorization]
+                    observedTokensOnTarget += auth
+                    if (auth == "Bearer refreshed-token") {
+                        respond(
+                            content = """{"ok":true}""",
+                            status = HttpStatusCode.OK,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json")
+                        )
+                    } else {
+                        respond(
+                            content = """{"error":"expired"}""",
+                            status = HttpStatusCode.Unauthorized,
+                            headers = headersOf(HttpHeaders.ContentType, "application/json")
+                        )
+                    }
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        }
+
+        val refreshClient = HttpClient(MockEngine { _ ->
+            refreshCalled = true
+            respond("""{"accessToken":"unused"}""", HttpStatusCode.OK)
+        }) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        val client = HttpClient(apiEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://api.baapp.mx/api/v1",
+            refreshClient = refreshClient
+        ).attachTo(client)
+
+        val response = client.get("https://api.baapp.mx/api/v1/redirect-me")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertFalse(refreshCalled, "Should recover using the already-refreshed token in storage")
+        assertEquals(listOf<String?>("Bearer old-token", "Bearer refreshed-token"), observedTokensOnTarget)
+    }
 }
