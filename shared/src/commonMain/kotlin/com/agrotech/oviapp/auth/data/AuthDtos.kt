@@ -9,6 +9,11 @@ data class LoginRequest(
 )
 
 @Serializable
+data class RefreshRequest(
+    val refreshToken: String
+)
+
+@Serializable
 data class UserDto(
     val id: String? = null,
     val username: String? = null,
@@ -58,4 +63,21 @@ data class LoginResponse(
 
     fun resolveUsername(fallback: String): String =
         data?.user?.username ?: user?.username ?: fallback
+}
+
+@Serializable
+data class RefreshResponse(
+    val accessToken: String? = null,
+    val access_token: String? = null,
+    val token: String? = null,
+    val jwt: String? = null,
+    val refreshToken: String? = null,
+    val refresh_token: String? = null,
+    val data: RefreshResponse? = null
+) {
+    fun resolveAccessToken(): String? =
+        data?.resolveAccessToken() ?: accessToken ?: access_token ?: token ?: jwt
+
+    fun resolveRefreshToken(): String? =
+        data?.resolveRefreshToken() ?: refreshToken ?: refresh_token
 }
