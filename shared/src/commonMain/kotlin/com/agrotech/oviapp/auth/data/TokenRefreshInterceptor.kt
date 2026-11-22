@@ -92,7 +92,6 @@ class TokenRefreshInterceptor(
                     when {
                         // No session or missing captured session
                         capturedSession == null || currentSession == null -> {
-                            sessionStorage.clearSession()
                             false
                         }
                         // Replacement account has taken over: do not replay request across accounts!

@@ -479,9 +479,8 @@ class TokenRefreshInterceptorTest {
     }
 
     @Test
-    fun testClientCloseClosesRefreshClient() {
+    fun testClientCloseClosesRefreshClient() = runTest {
         val storage = FakeSessionStorage()
-        var refreshEngineClosed = false
 
         val refreshEngine = MockEngine { _ ->
             respond(
@@ -503,7 +502,15 @@ class TokenRefreshInterceptorTest {
 
         // Closing the authenticated client should close the refresh client
         authenticatedClient.close()
-        // Client coroutines job is closed/cancelled
-        assertFalse(authenticatedClient.coroutineContext[kotlinx.coroutines.Job]?.isActive ?: true)
+
+        val authJob = authenticatedClient.coroutineContext[kotlinx.coroutines.Job]
+        val refreshJob = refreshClient.coroutineContext[kotlinx.coroutines.Job]
+
+        authJob?.join()
+        refreshJob?.join()
+
+        // Both clients' jobs must be inactive after closing and awaiting authenticatedClient
+        assertFalse(authJob?.isActive ?: true, "Authenticated client job must be inactive")
+        assertFalse(refreshJob?.isActive ?: true, "Refresh client job must be inactive")
     }
 }

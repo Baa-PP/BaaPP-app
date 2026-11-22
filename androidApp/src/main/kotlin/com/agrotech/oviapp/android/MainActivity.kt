@@ -131,6 +131,7 @@ private fun MainApp(
 ) {
     var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
     var retryKey by remember { mutableStateOf(0) }
+    var isBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(retryKey) {
@@ -148,6 +149,8 @@ private fun MainApp(
             state = InitialState.Error(
                 message = e.message ?: "No se pudo inicializar el almacenamiento seguro."
             )
+        } finally {
+            isBusy = false
         }
     }
 
@@ -205,7 +208,13 @@ private fun MainApp(
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
-                            onClick = { retryKey++ },
+                            onClick = {
+                                if (!isBusy) {
+                                    isBusy = true
+                                    retryKey++
+                                }
+                            },
+                            enabled = !isBusy,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp),
@@ -217,13 +226,23 @@ private fun MainApp(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = {
-                                scope.launch {
-                                    withContext(Dispatchers.IO) {
-                                        onResetStorage()
+                                if (!isBusy) {
+                                    isBusy = true
+                                    scope.launch {
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                onResetStorage()
+                                            }
+                                            retryKey++
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Throwable) {
+                                            isBusy = false
+                                        }
                                     }
-                                    retryKey++
                                 }
                             },
+                            enabled = !isBusy,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp),
