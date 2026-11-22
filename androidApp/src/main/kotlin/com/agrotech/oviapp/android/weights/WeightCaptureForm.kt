@@ -114,6 +114,11 @@ fun WeightCaptureForm(
                             date = date,
                         ),
                     )
+                    // Tras guardar se limpian las medidas: un segundo toque ya no duplica el mismo pesaje.
+                    if (result is RecordWeightResult.Recorded) {
+                        weight = ""
+                        scrotal = ""
+                    }
                 }
             },
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),

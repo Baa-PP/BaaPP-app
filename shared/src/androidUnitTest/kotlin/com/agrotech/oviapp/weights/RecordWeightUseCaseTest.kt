@@ -3,7 +3,13 @@ package com.agrotech.oviapp.weights
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.agrotech.oviapp.db.OviAppDatabase
+import com.agrotech.oviapp.sync.PendingSyncQueue
+import com.agrotech.oviapp.sync.SyncEntityType
+import com.agrotech.oviapp.sync.SyncOperation
 import kotlinx.datetime.LocalDate
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -16,15 +22,18 @@ class RecordWeightUseCaseTest {
     private lateinit var driver: SqlDriver
     private lateinit var database: OviAppDatabase
     private lateinit var useCase: RecordWeightUseCase
+    private lateinit var queue: PendingSyncQueue
     private var nextId = 0
+    private var nextMutation = 0
 
     @BeforeTest
     fun setUp() {
         driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
+        queue = PendingSyncQueue(database, nowMillis = { 1_795_000_000_000 }, newMutationId = { "m${++nextMutation}" })
         useCase = RecordWeightUseCase(
-            store = SqlDelightWeightStore(database),
+            store = SqlDelightWeightStore(database, queue),
             newId = { "w${++nextId}" },
             now = { "2026-11-22T12:00:00Z" },
         )
@@ -57,6 +66,24 @@ class RecordWeightUseCaseTest {
     }
 
     @Test
+    fun eachWeighingIsQueuedForTheServerWithTheRegisterWeightFields() {
+        val result = useCase.record("ram", input(WeightMilestone.WEANING, "19.25", LocalDate(2026, 3, 2), scrotal = "18.5"))
+        val id = assertIs<RecordWeightResult.Recorded>(result).entry.record.id
+
+        val event = queue.pending().single()
+        assertEquals(SyncEntityType.WEIGHT_MEASUREMENT, event.entityType)
+        assertEquals(SyncOperation.CREATE, event.operation)
+        // Mismos campos que POST /api/v1/weights (RegisterWeightRequest); el id local hace idempotente el reenvío.
+        val payload = Json.parseToJsonElement(event.payloadJson).jsonObject
+        assertEquals(id, payload["id"]!!.jsonPrimitive.content)
+        assertEquals("ram", payload["animalId"]!!.jsonPrimitive.content)
+        assertEquals("WEANING", payload["milestone"]!!.jsonPrimitive.content)
+        assertEquals("19.25", payload["weightKg"]!!.jsonPrimitive.content)
+        assertEquals("18.5", payload["scrotalCircumferenceCm"]!!.jsonPrimitive.content)
+        assertEquals("2026-03-02", payload["date"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun historyIsRebuiltFromSqliteInChronologicalOrder() {
         useCase.record("ram", input(WeightMilestone.DAY_120, "34", LocalDate(2026, 5, 1)))
         useCase.record("ram", input(WeightMilestone.BIRTH, "4", LocalDate(2026, 1, 1)))
@@ -73,6 +100,7 @@ class RecordWeightUseCaseTest {
 
         assertEquals(listOf(WeightError.SCROTAL_FEMALE_NOT_ALLOWED), assertIs<RecordWeightResult.Rejected>(result).errors)
         assertNull(database.oviAppDatabaseQueries.selectLatestWeightByAnimal("ewe").executeAsOneOrNull())
+        assertEquals(0, queue.pendingCount())
     }
 
     @Test
