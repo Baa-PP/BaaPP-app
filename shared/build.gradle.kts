@@ -23,9 +23,14 @@ kotlin {
             implementation(libs.ktor.serialization.kotlinx.json)
             implementation(libs.sqldelight.coroutines)
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
+        }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.sqldelight.android.driver)
+            implementation(libs.androidx.security.crypto)
         }
     }
 }
