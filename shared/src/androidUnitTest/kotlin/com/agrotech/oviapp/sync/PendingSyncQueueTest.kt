@@ -166,6 +166,25 @@ class PendingSyncQueueTest {
         oldDriver.close()
     }
 
+    @Test
+    fun theNextSequenceIsFoundThroughAnIndexNotAFullScan() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        val plan = driver.executeQuery(
+            identifier = null,
+            sql = "EXPLAIN QUERY PLAN SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events",
+            mapper = { cursor ->
+                val rows = mutableListOf<String>()
+                while (cursor.next().value) rows += cursor.getString(3).orEmpty()
+                app.cash.sqldelight.db.QueryResult.Value(rows.joinToString(" | "))
+            },
+            parameters = 0,
+        ).value
+
+        assertTrue("idx_pending_sync_events_sequence" in plan, "Plan de consulta: $plan")
+        driver.close()
+    }
+
     private fun insertWeight(id: String) {
         database.oviAppDatabaseQueries.insertWeightMeasurement(
             id = id,
