@@ -50,6 +50,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        WeaningNotifications.alertFrom(intent)?.let { openedAlert.value = it }
+        WeaningNotifications.alertFrom(intent)?.let { alert ->
+            // Sin setIntent, al recrear la Activity (rotación) onCreate volvería a leer el aviso anterior.
+            setIntent(intent)
+            openedAlert.value = alert
+        }
     }
 }

@@ -1,5 +1,7 @@
 package com.agrotech.oviapp.notifications
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -88,6 +90,26 @@ class DeviceTokenRegistrarTest {
     }
 
     @Test
+    fun aLogoutDuringAnInFlightRequestDoesNotMarkTheTokenAsRegistered() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val api = FakeDeviceTokenApi(gate = gate)
+        val store = InMemoryDeviceTokenStore()
+        // Cada llamada a Notifications.registrar(...) crea su propia instancia; comparten solo el store.
+        val firstUser = DeviceTokenRegistrar(api, store)
+        firstUser.onNewToken("token-1")
+
+        val inFlight = async { firstUser.registerIfNeeded(isLoggedIn = true) }
+        testScheduler.runCurrent()
+        DeviceTokenRegistrar(api, store).onLogout()
+        gate.complete(Unit)
+        inFlight.await()
+
+        assertNull(store.registeredToken)
+        assertIs<DeviceTokenRegistration.Registered>(DeviceTokenRegistrar(api, store).registerIfNeeded(isLoggedIn = true))
+        assertEquals(2, api.sent.size)
+    }
+
+    @Test
     fun withoutAnyTokenThereIsNothingToSend() = runTest {
         val api = FakeDeviceTokenApi()
         val registrar = DeviceTokenRegistrar(api, InMemoryDeviceTokenStore())
@@ -96,10 +118,14 @@ class DeviceTokenRegistrarTest {
         assertTrue(api.sent.isEmpty())
     }
 
-    private class FakeDeviceTokenApi(private var failuresBeforeSuccess: Int = 0) : DeviceTokenApi {
+    private class FakeDeviceTokenApi(
+        private var failuresBeforeSuccess: Int = 0,
+        private var gate: CompletableDeferred<Unit>? = null,
+    ) : DeviceTokenApi {
         val sent = mutableListOf<DeviceTokenRequest>()
 
         override suspend fun register(request: DeviceTokenRequest) {
+            gate?.let { gate = null; it.await() }
             if (failuresBeforeSuccess > 0) {
                 failuresBeforeSuccess--
                 error("Sin señal")

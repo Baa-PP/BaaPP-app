@@ -14,8 +14,13 @@ class SharedPrefsDeviceTokenStore(context: Context) : DeviceTokenStore {
         get() = prefs.getString(KEY_REGISTERED, null)
         set(value) = prefs.edit().putString(KEY_REGISTERED, value).apply()
 
+    override var sessionGeneration: Long
+        get() = prefs.getLong(KEY_GENERATION, 0)
+        set(value) = prefs.edit().putLong(KEY_GENERATION, value).apply()
+
     private companion object {
         const val KEY_PENDING = "pending"
         const val KEY_REGISTERED = "registered"
+        const val KEY_GENERATION = "session_generation"
     }
 }

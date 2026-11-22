@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -17,6 +18,7 @@ import com.agrotech.oviapp.notifications.WeaningAlert
 
 object WeaningNotifications {
     const val CHANNEL_ID = "destetes"
+    private const val NOTIFICATION_ID = 1
 
     fun createChannel(context: Context) {
         val channel = NotificationChannel(
@@ -46,8 +48,9 @@ object WeaningNotifications {
             .setContentIntent(tapIntent(context, alert))
             .setAutoCancel(true)
             .build()
-        // Un id por animal: un segundo aviso del mismo cordero reemplaza al anterior en vez de apilarse.
-        NotificationManagerCompat.from(context).notify(alert.animalId.hashCode(), notification)
+        // La identidad completa rancho/animal es el tag: un segundo aviso del mismo cordero reemplaza al
+        // anterior, y dos corderos distintos nunca chocan (un hashCode sí podría repetirse).
+        NotificationManagerCompat.from(context).notify(alert.identity(), NOTIFICATION_ID, notification)
     }
 
     /** Sirve tanto para el intent que arma show() como para el que arma Android al tocar un push en segundo plano. */
@@ -56,14 +59,18 @@ object WeaningNotifications {
         return WeaningAlert.fromData(extras.keySet().associateWith { extras.getString(it) })
     }
 
+    private fun WeaningAlert.identity(): String = "$ranchId/$animalId"
+
     private fun tapIntent(context: Context, alert: WeaningAlert): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
+            // Los extras no distinguen PendingIntents; la URI sí, así cada cordero conserva el suyo.
+            data = Uri.parse("baapp://destete/${alert.identity()}")
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             alert.toData().forEach { (key, value) -> putExtra(key, value) }
         }
         return PendingIntent.getActivity(
             context,
-            alert.animalId.hashCode(),
+            0,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

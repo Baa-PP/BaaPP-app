@@ -27,15 +27,20 @@ interface DeviceTokenApi {
     suspend fun register(request: DeviceTokenRequest)
 }
 
-/** Dónde se recuerdan el último token FCM recibido y el último que el servidor aceptó. */
+/**
+ * Dónde se recuerdan el último token FCM recibido, el último que el servidor aceptó y la
+ * generación de sesión (sube en cada logout) para descartar registros que terminan tarde.
+ */
 interface DeviceTokenStore {
     var pendingToken: String?
     var registeredToken: String?
+    var sessionGeneration: Long
 }
 
 class InMemoryDeviceTokenStore : DeviceTokenStore {
     override var pendingToken: String? = null
     override var registeredToken: String? = null
+    override var sessionGeneration: Long = 0
 }
 
 sealed interface DeviceTokenRegistration {
@@ -61,6 +66,7 @@ class DeviceTokenRegistrar(
 
     /** El token es por usuario: al cerrar sesión, el siguiente usuario debe registrarlo de nuevo. */
     fun onLogout() {
+        store.sessionGeneration += 1
         store.registeredToken = null
     }
 
@@ -69,9 +75,12 @@ class DeviceTokenRegistrar(
         if (!isLoggedIn) return DeviceTokenRegistration.NotLoggedIn
         if (token == store.registeredToken) return DeviceTokenRegistration.AlreadyRegistered
 
+        val generation = store.sessionGeneration
         return try {
             api.register(DeviceTokenRequest(token = token))
-            store.registeredToken = token
+            // Si hubo logout mientras viajaba la petición, ese registro era del usuario anterior:
+            // no se marca, para que el siguiente usuario sí registre el celular.
+            if (store.sessionGeneration == generation) store.registeredToken = token
             DeviceTokenRegistration.Registered
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
             throw cancellation
