@@ -90,6 +90,8 @@ CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measureme
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
 
 CREATE INDEX idx_pending_sync_events_status_sequence ON pending_sync_events (sync_status, sequence);
+-- MAX(sequence) en cada inserción: con sequence a la izquierda SQLite lo resuelve sin recorrer el historial.
+CREATE INDEX idx_pending_sync_events_sequence ON pending_sync_events (sequence);
 
 -- Queries: sync
 insertSyncEvent:
