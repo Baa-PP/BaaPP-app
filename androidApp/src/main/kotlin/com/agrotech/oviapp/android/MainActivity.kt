@@ -98,9 +98,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onResetStorage = {
-                            try {
-                                applicationContext.deleteSharedPreferences("baapp_secure_session_prefs")
-                            } catch (_: Exception) {}
+                            applicationContext.deleteSharedPreferences("baapp_secure_session_prefs")
                         }
                     )
                 }
@@ -127,7 +125,7 @@ private sealed interface InitialState {
 @Composable
 private fun MainApp(
     onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>?,
-    onResetStorage: suspend () -> Unit
+    onResetStorage: suspend () -> Boolean
 ) {
     var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
     var retryKey by remember { mutableStateOf(0) }
@@ -230,13 +228,23 @@ private fun MainApp(
                                     isBusy = true
                                     scope.launch {
                                         try {
-                                            withContext(Dispatchers.IO) {
+                                            val deleted = withContext(Dispatchers.IO) {
                                                 onResetStorage()
                                             }
-                                            retryKey++
+                                            if (deleted) {
+                                                retryKey++
+                                            } else {
+                                                state = InitialState.Error(
+                                                    "No se pudo restablecer el almacenamiento seguro."
+                                                )
+                                                isBusy = false
+                                            }
                                         } catch (e: CancellationException) {
                                             throw e
-                                        } catch (_: Throwable) {
+                                        } catch (e: Throwable) {
+                                            state = InitialState.Error(
+                                                e.message ?: "No se pudo restablecer el almacenamiento seguro."
+                                            )
                                             isBusy = false
                                         }
                                     }
@@ -281,6 +289,7 @@ fun AppNavigation(
             isLoading = isLoading,
             errorMessage = errorMessage,
             onLoginClick = { user, pass ->
+                if (isLoading) return@LoginScreen
                 isLoading = true
                 errorMessage = null
                 scope.launch {

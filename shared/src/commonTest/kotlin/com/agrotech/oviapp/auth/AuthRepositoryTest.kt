@@ -17,6 +17,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
@@ -28,19 +29,45 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FakeSessionStorage : SessionStorage {
+    private val lock = com.agrotech.oviapp.auth.domain.AuthLock()
     private var currentSession: AuthSession? = null
 
-    override fun saveSession(session: AuthSession) {
+    override fun saveSession(session: AuthSession) = lock.withLock {
         currentSession = session
     }
 
-    override fun getSession(): AuthSession? = currentSession
+    override fun getSession(): AuthSession? = lock.withLock { currentSession }
 
-    override fun clearSession() {
+    override fun clearSession() = lock.withLock {
         currentSession = null
     }
 
-    override fun hasSession(): Boolean = currentSession != null
+    override fun hasSession(): Boolean = lock.withLock { currentSession != null }
+
+    override fun updateSessionIfMatches(
+        expectedSessionId: String,
+        expectedRefreshToken: String?,
+        transform: (AuthSession) -> AuthSession
+    ): Boolean = lock.withLock {
+        val current = currentSession ?: return@withLock false
+        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+            return@withLock false
+        }
+        currentSession = transform(current)
+        true
+    }
+
+    override fun clearSessionIfMatches(
+        expectedSessionId: String,
+        expectedRefreshToken: String?
+    ): Boolean = lock.withLock {
+        val current = currentSession ?: return@withLock false
+        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+            return@withLock false
+        }
+        currentSession = null
+        true
+    }
 }
 
 class FakeAuthService(
@@ -230,6 +257,38 @@ class AuthRepositoryTest {
         assertFalse(service.wasClosed)
         repository.close()
         assertTrue(service.wasClosed)
+    }
+
+    @Test
+    fun testLoginSupersededByLogoutDoesNotSaveStaleSession() = runTest {
+        val storage = FakeSessionStorage()
+        val loginStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val allowLoginComplete = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        val suspendingService = object : AuthService {
+            override suspend fun login(username: String, password: String): AuthSession {
+                loginStarted.complete(Unit)
+                allowLoginComplete.await()
+                return AuthSession(
+                    accessToken = "stale-jwt",
+                    username = username,
+                    role = "OWNER",
+                    sessionId = "sess-stale"
+                )
+            }
+            override fun close() {}
+        }
+
+        val repository = AuthRepository(suspendingService, storage)
+        val loginJob = async { repository.login("owner", "secret") }
+        loginStarted.await()
+
+        repository.logout()
+        allowLoginComplete.complete(Unit)
+
+        val result = loginJob.await()
+        assertTrue(result.isFailure)
+        assertNull(storage.getSession())
     }
 
     @Test

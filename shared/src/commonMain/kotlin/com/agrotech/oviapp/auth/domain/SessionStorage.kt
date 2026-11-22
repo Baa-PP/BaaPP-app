@@ -8,26 +8,20 @@ interface SessionStorage {
 
     /**
      * Atomically updates the stored session only if the current stored session
-     * still belongs to [expectedSessionId].
+     * still belongs to [expectedSessionId] and [expectedRefreshToken].
      */
-    fun updateSessionIfMatchesGeneration(
+    fun updateSessionIfMatches(
         expectedSessionId: String,
+        expectedRefreshToken: String?,
         transform: (AuthSession) -> AuthSession
-    ): Boolean {
-        val current = getSession() ?: return false
-        if (current.sessionId != expectedSessionId) return false
-        saveSession(transform(current))
-        return true
-    }
+    ): Boolean
 
     /**
      * Atomically clears the stored session only if the current stored session
-     * still belongs to [expectedSessionId].
+     * still belongs to [expectedSessionId] and [expectedRefreshToken].
      */
-    fun clearSessionIfMatchesGeneration(expectedSessionId: String): Boolean {
-        val current = getSession() ?: return false
-        if (current.sessionId != expectedSessionId) return false
-        clearSession()
-        return true
-    }
+    fun clearSessionIfMatches(
+        expectedSessionId: String,
+        expectedRefreshToken: String?
+    ): Boolean
 }

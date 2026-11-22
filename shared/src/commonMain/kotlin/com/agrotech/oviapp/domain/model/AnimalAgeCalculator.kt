@@ -52,7 +52,7 @@ object AnimalAgeCalculator {
         val year = parts[0].toIntOrNull() ?: return null
         val month = parts[1].toIntOrNull() ?: return null
         val day = parts[2].toIntOrNull() ?: return null
-        if (year < 1900 || month !in 1..12) return null
+        if (year !in 1900..9999 || month !in 1..12) return null
         if (day !in 1..daysInMonth(year, month)) return null
         return CalendarDate(year, month, day)
     }

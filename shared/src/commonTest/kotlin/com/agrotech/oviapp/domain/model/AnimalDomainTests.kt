@@ -107,6 +107,7 @@ class AnimalDomainTests {
     fun testAgeCalculationRejectsInvalidOrFutureBirthDates() {
         assertNull(AnimalAgeCalculator.calculateAge("2026-05-10", "2026-05-09"))
         assertNull(AnimalAgeCalculator.calculateAge("2026-02-30", "2026-03-10"))
+        assertNull(AnimalAgeCalculator.calculateAge("10000-01-01", "10001-01-01"))
         assertNull(AnimalAgeCalculator.calculateAge("invalid", "2026-03-10"))
     }
 

@@ -422,10 +422,17 @@ class TokenRefreshInterceptorTest {
         storage.saveSession(initialSession)
 
         val refreshCallCount = AtomicInteger(0)
+        val expiredArrivals = AtomicInteger(0)
+        val allThreeArrived = kotlinx.coroutines.CompletableDeferred<Unit>()
 
         val resourceEngine = MockEngine { request ->
             val auth = request.headers[HttpHeaders.Authorization]
             if (auth == "Bearer expired-token") {
+                if (expiredArrivals.incrementAndGet() >= 3) {
+                    allThreeArrived.complete(Unit)
+                } else {
+                    allThreeArrived.await()
+                }
                 respondError(HttpStatusCode.Unauthorized)
             } else if (auth == "Bearer new-token") {
                 respond(
@@ -645,15 +652,48 @@ class TokenRefreshInterceptorTest {
         )
         storage.saveSession(sess2)
 
-        val updated = storage.updateSessionIfMatchesGeneration("sess-1") {
-            it.copy(accessToken = "stale-tok")
-        }
-        val cleared = storage.clearSessionIfMatchesGeneration("sess-1")
+        // Mismatched sessionId is rejected
+        assertFalse(storage.updateSessionIfMatches("sess-1", "ref-2") { it.copy(accessToken = "stale-tok") })
+        assertFalse(storage.clearSessionIfMatches("sess-1", "ref-2"))
 
-        assertFalse(updated)
-        assertFalse(cleared)
+        // Same sessionId but outdated refreshToken (e.g. rotated by another interceptor) is rejected
+        assertFalse(storage.updateSessionIfMatches("sess-2", "ref-1") { it.copy(accessToken = "stale-tok") })
+        assertFalse(storage.clearSessionIfMatches("sess-2", "ref-1"))
+
         assertEquals("tok-2", storage.getSession()?.accessToken)
         assertEquals("sess-2", storage.getSession()?.sessionId)
+    }
+
+    @Test
+    fun testRefreshClientWithExpectSuccessTrueStillClearsSessionOn401() = runTest {
+        val storage = FakeSessionStorage()
+        storage.saveSession(
+            AuthSession(
+                accessToken = "expired-tok",
+                refreshToken = "revoked-ref",
+                username = "owner",
+                role = "OWNER",
+                sessionId = "sess-1"
+            )
+        )
+
+        val apiClient = HttpClient(MockEngine { _ -> respondError(HttpStatusCode.Unauthorized) }) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val refreshClient = HttpClient(MockEngine { _ -> respondError(HttpStatusCode.Unauthorized) }) {
+            expectSuccess = true
+            install(ContentNegotiation) { json(json) }
+        }
+
+        TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = KtorAuthService.DEFAULT_BASE_URL,
+            refreshClient = refreshClient
+        ).attachTo(apiClient)
+
+        val resp = apiClient.get("https://du6aq4me7fp0q.cloudfront.net/api/v1/animals")
+        assertEquals(HttpStatusCode.Unauthorized, resp.status)
+        assertNull(storage.getSession(), "Revoked refresh must clear session even when refreshClient has expectSuccess=true")
     }
 
     @Test

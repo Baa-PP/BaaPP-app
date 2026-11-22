@@ -6,14 +6,17 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.expectSuccess
 import io.ktor.client.plugins.plugin
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.utils.EmptyContent
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.contentType
 import io.ktor.http.encodedPath
 import io.ktor.http.isSuccess
@@ -67,25 +70,34 @@ class TokenRefreshInterceptor(
             val isAuthEndpoint = request.url.encodedPath.contains("/auth/")
 
             // 1. Add credentials only if request matches baseUrl's origin and is not an auth endpoint.
-            // Strip HEADER_ACTIVE_RANCH_ID and provenance if a redirect carried them to a foreign origin.
+            // Strip credentials on foreign-origin hops while preserving immutable initiating provenance.
             val capturedSession = if (matchesOrigin && !isAuthEndpoint) sessionStorage.getSession() else null
+            val existingProvenance = request.attributes.getOrNull(INJECTED_CREDENTIALS_KEY)
 
             if (!matchesOrigin) {
                 request.headers.remove(HEADER_ACTIVE_RANCH_ID)
-                request.attributes.remove(INJECTED_CREDENTIALS_KEY)
-            } else if (!isAuthEndpoint && capturedSession != null) {
-                if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession.accessToken.isNotBlank()) {
-                    request.header(HttpHeaders.Authorization, "Bearer ${capturedSession.accessToken}")
-                    request.attributes.put(
-                        INJECTED_CREDENTIALS_KEY,
-                        InjectedCredentials(
-                            sessionId = capturedSession.sessionId,
-                            accessToken = capturedSession.accessToken
-                        )
-                    )
+                if (existingProvenance != null) {
+                    request.headers.remove(HttpHeaders.Authorization)
                 }
-                if (!request.headers.contains(HEADER_ACTIVE_RANCH_ID) && !capturedSession.ranchId.isNullOrBlank()) {
-                    request.header(HEADER_ACTIVE_RANCH_ID, capturedSession.ranchId)
+            } else if (!isAuthEndpoint && capturedSession != null) {
+                val generationMatches = existingProvenance == null ||
+                    existingProvenance.sessionId == capturedSession.sessionId
+                if (generationMatches) {
+                    if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession.accessToken.isNotBlank()) {
+                        request.header(HttpHeaders.Authorization, "Bearer ${capturedSession.accessToken}")
+                        if (existingProvenance == null) {
+                            request.attributes.put(
+                                INJECTED_CREDENTIALS_KEY,
+                                InjectedCredentials(
+                                    sessionId = capturedSession.sessionId,
+                                    accessToken = capturedSession.accessToken
+                                )
+                            )
+                        }
+                    }
+                    if (!request.headers.contains(HEADER_ACTIVE_RANCH_ID) && !capturedSession.ranchId.isNullOrBlank()) {
+                        request.header(HEADER_ACTIVE_RANCH_ID, capturedSession.ranchId)
+                    }
                 }
             }
 
@@ -123,7 +135,7 @@ class TokenRefreshInterceptor(
                         }
                         // Stored refresh token is missing or blank
                         currentSession.refreshToken.isNullOrBlank() -> {
-                            sessionStorage.clearSessionIfMatchesGeneration(originSessionId)
+                            sessionStorage.clearSessionIfMatches(originSessionId, currentSession.refreshToken)
                             false
                         }
                         // Need to call POST /api/v1/auth/refresh
@@ -133,7 +145,7 @@ class TokenRefreshInterceptor(
                     }
                 }
 
-                if (refreshSucceeded) {
+                if (refreshSucceeded && isReplayableBody(request.body)) {
                     val newSession = sessionStorage.getSession()
                     if (newSession != null &&
                         originSessionId != null &&
@@ -158,6 +170,14 @@ class TokenRefreshInterceptor(
         }
     }
 
+    private fun isReplayableBody(body: Any): Boolean = when (body) {
+        is EmptyContent,
+        is OutgoingContent.NoContent,
+        is OutgoingContent.ByteArrayContent -> true
+        is OutgoingContent -> false
+        else -> true
+    }
+
     private suspend fun performRefresh(
         refreshToken: String,
         initialSession: AuthSession
@@ -167,6 +187,7 @@ class TokenRefreshInterceptor(
 
         return try {
             val response = refreshClient.post(refreshUrl) {
+                expectSuccess = false
                 contentType(ContentType.Application.Json)
                 header("Accept", "application/json")
                 setBody(RefreshRequest(refreshToken = refreshToken))
@@ -176,8 +197,8 @@ class TokenRefreshInterceptor(
                 response.status == HttpStatusCode.Unauthorized ||
                 response.status == HttpStatusCode.Forbidden ||
                 response.status == HttpStatusCode.BadRequest -> {
-                    // Atomically invalidate only if stored session still belongs to this generation
-                    sessionStorage.clearSessionIfMatchesGeneration(initialSession.sessionId)
+                    // Atomically invalidate only if stored session & submitted refresh token still match
+                    sessionStorage.clearSessionIfMatches(initialSession.sessionId, refreshToken)
                     false
                 }
                 response.status.isSuccess() -> {
@@ -186,7 +207,7 @@ class TokenRefreshInterceptor(
                     if (newAccessToken != null) {
                         val newRefreshToken = refreshResponse.resolveRefreshToken()?.takeIf { it.isNotBlank() }
                             ?: initialSession.refreshToken
-                        sessionStorage.updateSessionIfMatchesGeneration(initialSession.sessionId) { stored ->
+                        sessionStorage.updateSessionIfMatches(initialSession.sessionId, refreshToken) { stored ->
                             stored.copy(
                                 accessToken = newAccessToken,
                                 refreshToken = newRefreshToken

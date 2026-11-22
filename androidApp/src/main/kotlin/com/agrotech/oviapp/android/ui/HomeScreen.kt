@@ -135,10 +135,10 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = if (capabilities.isReadOnlyMode) {
-                                    "Sesión activa · Modo consulta"
-                                } else {
-                                    "Sesión activa · Captura offline lista"
+                                text = when {
+                                    capabilities.canCapture -> "Sesión activa · Captura offline lista"
+                                    capabilities.isReadOnlyMode -> "Sesión activa · Modo consulta"
+                                    else -> "Sesión activa · Edición habilitada"
                                 },
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontWeight = FontWeight.Bold,
@@ -285,6 +285,10 @@ fun HomeScreen(
                         }
                         InfoNoticeBanner(
                             "Los nacimientos guardados son inmutables. Si hubo un error, repórtalo con foto a Técnico o Asociación."
+                        )
+                    } else if (!capabilities.canCapture) {
+                        InfoNoticeBanner(
+                            "Consulta de nacimientos disponible en APP-12 (solo lectura/auditoría)."
                         )
                     }
                 }
