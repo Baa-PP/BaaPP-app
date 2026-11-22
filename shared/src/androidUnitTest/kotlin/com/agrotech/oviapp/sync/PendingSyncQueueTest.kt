@@ -71,18 +71,40 @@ class PendingSyncQueueTest {
     }
 
     @Test
-    fun readsPendingMutationsInChronologicalOrder() {
+    fun readsPendingMutationsInWriteOrderEvenIfTheClockGoesBack() {
+        // FIFO real: si el reloj del celular retrocede, el orden de escritura sigue siendo el causal.
         nowMillis = 1_795_361_405_300L
-        val third = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {}
-        nowMillis = 1_795_361_405_100L
         val first = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+        nowMillis = 1_795_361_405_100L
+        val second = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {}
         nowMillis = 1_795_361_405_200L
-        val second = queue.writeAndEnqueue(SyncEntityType.BIRTH_EVENT, SyncOperation.CREATE, "{}", localPhotoPath = "/fotos/parto.webp") {}
+        val third = queue.writeAndEnqueue(SyncEntityType.BIRTH_EVENT, SyncOperation.CREATE, "{}", localPhotoPath = "/fotos/parto.webp") {}
 
         val pending = queue.pending()
 
         assertEquals(listOf(first.mutationId, second.mutationId, third.mutationId), pending.map { it.mutationId })
-        assertEquals("/fotos/parto.webp", pending[1].localPhotoPath)
+        assertEquals("/fotos/parto.webp", pending[2].localPhotoPath)
+    }
+
+    @Test
+    fun mutationsInTheSameMillisecondKeepTheirWriteOrder() {
+        // Los ids van al revés del orden de escritura: antes el desempate por mutation_id los invertía.
+        val ids = ArrayDeque(listOf("ffff-create", "0000-update"))
+        val sameClock = PendingSyncQueue(database, nowMillis = { nowMillis }, newMutationId = { ids.removeFirst() })
+
+        sameClock.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+        sameClock.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {}
+
+        assertEquals(listOf("ffff-create", "0000-update"), queue.pending().map { it.mutationId })
+    }
+
+    @Test
+    fun anUnchangedWriteDoesNotEnqueueAnything() {
+        val skipped = queue.writeAndEnqueueIfChanged(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") { 0L }
+        val queued = queue.writeAndEnqueueIfChanged(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") { 1L }
+
+        assertNull(skipped)
+        assertEquals(listOf(queued!!.mutationId), queue.pending().map { it.mutationId })
     }
 
     @Test
@@ -95,6 +117,32 @@ class PendingSyncQueueTest {
 
         assertEquals(listOf(b.mutationId), queue.pending().map { it.mutationId })
         assertEquals(1L, queue.pendingCount())
+    }
+
+    @Test
+    fun theMigrationKeepsAlreadyQueuedMutationsInInsertionOrder() {
+        val oldDriver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        // Cola tal como quedó en la versión 2, con dos mutaciones cuyo id va al revés de su inserción.
+        oldDriver.execute(
+            null,
+            """
+            CREATE TABLE pending_sync_events (
+                mutation_id TEXT NOT NULL PRIMARY KEY, entity_type TEXT NOT NULL, operation TEXT NOT NULL,
+                occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL, local_photo_path TEXT,
+                sync_status TEXT NOT NULL DEFAULT 'PENDING'
+            )
+            """.trimIndent(),
+            0,
+        )
+        oldDriver.execute(null, "INSERT INTO pending_sync_events VALUES ('zz', 'ANIMAL', 'CREATE', 't', '{}', NULL, 'PENDING')", 0)
+        oldDriver.execute(null, "INSERT INTO pending_sync_events VALUES ('aa', 'ANIMAL', 'UPDATE', 't', '{}', NULL, 'PENDING')", 0)
+
+        OviAppDatabase.Schema.migrate(oldDriver, oldVersion = 2, newVersion = 3)
+        val migrated = PendingSyncQueue(OviAppDatabase(oldDriver), nowMillis = { nowMillis }, newMutationId = { "new" })
+        migrated.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {}
+
+        assertEquals(listOf("zz", "aa", "new"), migrated.pending().map { it.mutationId })
+        oldDriver.close()
     }
 
     private fun insertWeight(id: String) {
