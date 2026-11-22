@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.auth
 
+import com.agrotech.oviapp.auth.data.AuthServerException
 import com.agrotech.oviapp.auth.data.AuthService
 import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.data.LoginResponse
@@ -7,6 +8,7 @@ import com.agrotech.oviapp.auth.data.UserDto
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.auth.domain.SessionStorage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,6 +39,8 @@ class FakeAuthService(
     var shouldFail: Boolean = false,
     var failureException: Exception = Exception("Network error")
 ) : AuthService {
+    var wasClosed = false
+
     override suspend fun login(username: String, password: String): AuthSession {
         if (shouldFail) throw failureException
         return mockSession ?: AuthSession(
@@ -47,6 +51,10 @@ class FakeAuthService(
             ranchId = "ranch-uuid-1",
             permissions = mapOf("capture" to true)
         )
+    }
+
+    override fun close() {
+        wasClosed = true
     }
 }
 
@@ -135,5 +143,45 @@ class AuthRepositoryTest {
         assertEquals("OWNER", resp.resolveRole())
         assertEquals("ranch-123", resp.resolveRanchId())
         assertEquals("propietario", resp.resolveUsername("fallback"))
+    }
+
+    @Test
+    fun testCancellationExceptionIsRethrown() = runTest {
+        val storage = FakeSessionStorage()
+        val service = FakeAuthService(
+            shouldFail = true,
+            failureException = CancellationException("Coroutines job cancelled")
+        )
+        val repository = AuthRepository(service, storage)
+
+        assertFailsWith<CancellationException> {
+            repository.login("user", "pass")
+        }
+    }
+
+    @Test
+    fun testRepositoryCloseClosesAuthService() {
+        val storage = FakeSessionStorage()
+        val service = FakeAuthService()
+        val repository = AuthRepository(service, storage)
+
+        assertFalse(service.wasClosed)
+        repository.close()
+        assertTrue(service.wasClosed)
+    }
+
+    @Test
+    fun testBlankOrWhitespaceTokenValidation() {
+        val emptyTokenResponse = LoginResponse(accessToken = "")
+        val whitespaceTokenResponse = LoginResponse(accessToken = "   ")
+        val validTokenResponse = LoginResponse(accessToken = "valid-token")
+
+        val token1 = emptyTokenResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
+        val token2 = whitespaceTokenResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
+        val token3 = validTokenResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
+
+        assertNull(token1)
+        assertNull(token2)
+        assertEquals("valid-token", token3)
     }
 }

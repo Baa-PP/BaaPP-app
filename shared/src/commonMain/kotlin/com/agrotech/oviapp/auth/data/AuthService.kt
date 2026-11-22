@@ -12,10 +12,12 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 
-interface AuthService {
+interface AuthService : AutoCloseable {
     suspend fun login(username: String, password: String): AuthSession
+    override fun close() {}
 }
 
 class KtorAuthService internal constructor(
@@ -40,6 +42,8 @@ class KtorAuthService internal constructor(
                 header("Accept", "application/json")
                 setBody(LoginRequest(username = trimmedUser, password = password))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             throw AuthNetworkException("No se pudo conectar con el servidor. Revisa tu conexión a internet.", e)
         }
@@ -55,7 +59,7 @@ class KtorAuthService internal constructor(
         }
 
         val loginResponse = response.body<LoginResponse>()
-        val token = loginResponse.resolveAccessToken()
+        val token = loginResponse.resolveAccessToken()?.takeIf { it.isNotBlank() }
             ?: throw AuthServerException("El servidor no devolvió un token de acceso válido.")
 
         return AuthSession(
@@ -66,6 +70,10 @@ class KtorAuthService internal constructor(
             ranchId = loginResponse.resolveRanchId(),
             permissions = loginResponse.resolvePermissions()
         )
+    }
+
+    override fun close() {
+        client.close()
     }
 
     companion object {
