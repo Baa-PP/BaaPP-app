@@ -31,6 +31,7 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        // Pruebas en JVM contra un SQLite real en memoria (sin emulador)
         val androidUnitTest by getting {
             dependencies {
                 implementation(libs.sqldelight.sqlite.driver)
