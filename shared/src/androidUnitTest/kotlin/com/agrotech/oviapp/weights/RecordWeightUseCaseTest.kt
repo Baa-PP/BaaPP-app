@@ -14,6 +14,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
@@ -25,13 +26,21 @@ class RecordWeightUseCaseTest {
     private lateinit var queue: PendingSyncQueue
     private var nextId = 0
     private var nextMutation = 0
+    private var failNextEnqueue = false
 
     @BeforeTest
     fun setUp() {
         driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
-        queue = PendingSyncQueue(database, nowMillis = { 1_795_000_000_000 }, newMutationId = { "m${++nextMutation}" })
+        queue = PendingSyncQueue(database, nowMillis = { 1_795_000_000_000 }, newMutationId = {
+            // Falla justo después del INSERT del pesaje, dentro de la transacción de la cola.
+            if (failNextEnqueue) {
+                failNextEnqueue = false
+                error("Sin espacio para encolar")
+            }
+            "m${++nextMutation}"
+        })
         useCase = RecordWeightUseCase(
             store = SqlDelightWeightStore(database, queue),
             newId = { "w${++nextId}" },
@@ -81,6 +90,21 @@ class RecordWeightUseCaseTest {
         assertEquals("19.25", payload["weightKg"]!!.jsonPrimitive.content)
         assertEquals("18.5", payload["scrotalCircumferenceCm"]!!.jsonPrimitive.content)
         assertEquals("2026-03-02", payload["date"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun aFailedEnqueueLeavesNothingAndTheRetrySavesExactlyOnce() {
+        failNextEnqueue = true
+
+        assertFailsWith<IllegalStateException> {
+            useCase.record("ram", input(WeightMilestone.BIRTH, "4", LocalDate(2026, 1, 1)))
+        }
+        assertNull(database.oviAppDatabaseQueries.selectLatestWeightByAnimal("ram").executeAsOneOrNull())
+        assertEquals(0, queue.pendingCount())
+
+        assertIs<RecordWeightResult.Recorded>(useCase.record("ram", input(WeightMilestone.BIRTH, "4", LocalDate(2026, 1, 1))))
+        assertEquals(1, database.oviAppDatabaseQueries.selectWeightsByAnimalChronological("ram").executeAsList().size)
+        assertEquals(1, queue.pendingCount())
     }
 
     @Test
