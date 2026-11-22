@@ -43,6 +43,11 @@ class FieldDesignTest {
                 "error" to (scheme.onError to scheme.error),
                 "background" to (scheme.onBackground to scheme.background),
                 "surface" to (scheme.onSurface to scheme.surface),
+                // Campos de texto rellenos (TextField): fondo surfaceContainerHighest con la etiqueta enfocada
+                // en primary, el texto escrito en onSurface y la etiqueta sin foco en onSurfaceVariant.
+                "etiqueta enfocada" to (scheme.primary to scheme.surfaceContainerHighest),
+                "texto del campo" to (scheme.onSurface to scheme.surfaceContainerHighest),
+                "etiqueta sin foco" to (scheme.onSurfaceVariant to scheme.surfaceContainerHighest),
             )
             rolePairs.forEach { (role, pair) ->
                 val ratio = FieldContrast.ratio(pair.first.argb(), pair.second.argb())

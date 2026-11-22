@@ -23,6 +23,8 @@ Reglas para cualquier pantalla de captura. El código vive en `androidApp/src/ma
 | Macho `#0D47A1` sobre `#E3F2FD` | 7.6 : 1 |
 | Tema oscuro: hembra `#F48FB1` / macho `#90CAF9` / verde `#A5D6A7` sobre `#121212` | 8.4 / 10.7 / 11.4 : 1 |
 | Tema oscuro: secundario `#2B1A12` sobre `#D7CCC8` / terciario `#00264D` sobre `#90CAF9` / alerta `#3B0000` sobre `#FFB4AB` | 10.6 / 8.7 / 10.4 : 1 |
+| Campo de texto: etiqueta enfocada `#1B5E20` / texto `#111111` / etiqueta sin foco `#333333` sobre `#F3F6F1` | 7.2 / 17.3 / 11.6 : 1 |
+| Tema oscuro, campo de texto: etiqueta enfocada `#A5D6A7` / texto `#FFFFFF` / etiqueta sin foco `#E0E0E0` sobre `#2A2A2A` | 8.7 / 14.4 / 10.9 : 1 |
 
 ## Vocabulario del ganadero
 
