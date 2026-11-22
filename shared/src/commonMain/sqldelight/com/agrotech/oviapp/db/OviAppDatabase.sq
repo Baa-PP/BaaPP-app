@@ -87,10 +87,19 @@ CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measureme
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
 
 -- Queries: sync
+insertSyncEvent:
+INSERT INTO pending_sync_events (
+    mutation_id, entity_type, operation, occurred_at, payload_json, local_photo_path, sync_status
+) VALUES (?, ?, ?, ?, ?, ?, 'PENDING');
+
 selectPendingSyncEvents:
 SELECT * FROM pending_sync_events
 WHERE sync_status = 'PENDING'
-ORDER BY occurred_at ASC;
+ORDER BY occurred_at ASC, mutation_id ASC;
+
+countPendingSyncEvents:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status = 'PENDING';
 
 markSyncEventCompleted:
 UPDATE pending_sync_events
