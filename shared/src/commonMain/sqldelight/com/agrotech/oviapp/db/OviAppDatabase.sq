@@ -284,3 +284,29 @@ WHERE ranch_id = :ranchId
   AND mortality_date IS NULL
   AND birth_date <= :bornOnOrBefore
 ORDER BY birth_date, folio_interno;
+-- APP-18: Confirmar destete (espejo de ConfirmWeaningUseCase de BE-009)
+selectLambForWeaning:
+SELECT id, ranch_id, sex, birth_date, weaning_date, status, mortality_date, dam_id, life_stage
+FROM local_animals
+WHERE id = :id;
+
+selectWeaningWeightForAnimal:
+SELECT id, weight_kg, scrotal_circumference_cm, measurement_date
+FROM local_weight_measurements
+WHERE animal_id = :animalId AND milestone = 'WEANING'
+ORDER BY measurement_date DESC, id DESC
+LIMIT 1;
+
+updateAnimalWeaning:
+UPDATE local_animals
+SET weaning_date = :weaningDate, life_stage = :lifeStage, status = :status, updated_at = :updatedAt
+WHERE id = :id;
+
+selectReproductiveStatus:
+SELECT reproductive_status FROM local_animals
+WHERE id = :id AND ranch_id = :ranchId;
+
+markMotherEmptyAfterWeaning:
+UPDATE local_animals
+SET reproductive_status = 'EMPTY', updated_at = :updatedAt
+WHERE id = :id AND ranch_id = :ranchId AND reproductive_status = 'LACTATING';
