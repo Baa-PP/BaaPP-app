@@ -50,7 +50,7 @@ object WeaningNotifications {
             .build()
         // La identidad completa rancho/animal es el tag: un segundo aviso del mismo cordero reemplaza al
         // anterior, y dos corderos distintos nunca chocan (un hashCode sí podría repetirse).
-        NotificationManagerCompat.from(context).notify(alert.identity(), NOTIFICATION_ID, notification)
+        NotificationManagerCompat.from(context).notify(alert.identity, NOTIFICATION_ID, notification)
     }
 
     /** Sirve tanto para el intent que arma show() como para el que arma Android al tocar un push en segundo plano. */
@@ -59,12 +59,12 @@ object WeaningNotifications {
         return WeaningAlert.fromData(extras.keySet().associateWith { extras.getString(it) })
     }
 
-    private fun WeaningAlert.identity(): String = "$ranchId/$animalId"
-
     private fun tapIntent(context: Context, alert: WeaningAlert): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             // Los extras no distinguen PendingIntents; la URI sí, así cada cordero conserva el suyo.
-            data = Uri.parse("baapp://destete/${alert.identity()}")
+            // appendPath codifica cada segmento por separado, así la URI tampoco es ambigua.
+            data = Uri.Builder().scheme("baapp").authority("destete")
+                .appendPath(alert.ranchId).appendPath(alert.animalId).build()
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             alert.toData().forEach { (key, value) -> putExtra(key, value) }
         }

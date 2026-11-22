@@ -120,6 +120,15 @@ data class WeaningAlert(
     val ranchId: String,
     val folioInterno: String?,
 ) {
+    /**
+     * Identidad estable rancho/animal para el tag de la notificación: el mismo cordero reemplaza su aviso
+     * anterior y dos corderos distintos nunca chocan. Cada parte se escapa antes de unirlas para que un
+     * "/" dentro de un id no vuelva ambigua la identidad.
+     */
+    val identity: String get() = "${escape(ranchId)}/${escape(animalId)}"
+
+    private fun escape(part: String) = part.replace("%", "%25").replace("/", "%2F")
+
     fun toData(): Map<String, String> = buildMap {
         put(KEY_TYPE, TYPE_WEANING_DUE)
         put(KEY_ANIMAL_ID, animalId)
