@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canal_destetes">Destetes</string>
+    <string name="canal_destetes_descripcion">Avisos de corderos que ya cumplieron la edad de destete.</string>
+    <string name="destete_titulo">Destete pendiente</string>
+    <string name="destete_texto">Un cordero ya está listo para destetar.</string>
+    <string name="destete_texto_folio">El cordero %1$s ya está listo para destetar.</string>
+    <string name="destete_abierto">Destete pendiente: %1$s</string>
+    <string name="destete_sin_folio">cordero sin folio</string>
+    <string name="destete_pantalla_pendiente">La pantalla de destetes llega con APP-16.</string>
+</resources>

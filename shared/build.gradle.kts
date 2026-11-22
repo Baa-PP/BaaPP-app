@@ -27,6 +27,11 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.sqldelight.android.driver)
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.ktor.client.mock)
+        }
     }
 }
 
