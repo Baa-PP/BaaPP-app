@@ -35,6 +35,10 @@ object FieldPalette {
     const val SKY = 0xFF0D47A1
     const val ON_SKY = 0xFFFFFFFF
 
+    /** Fondo de los campos de texto (surfaceContainerHighest) y su etiqueta sin foco (onSurfaceVariant). */
+    const val FIELD_CONTAINER = 0xFFF3F6F1
+    const val MUTED_INK = 0xFF333333
+
     /** Rosa de hembra y azul de macho, siempre acompañados de texto y símbolo (ver [SexIdentity]). */
     const val FEMALE = 0xFF880E4F
     const val FEMALE_CONTAINER = 0xFFFCE4EC
@@ -51,6 +55,8 @@ object FieldPalette {
     const val NIGHT_ON_SKY = 0xFF00264D
     const val NIGHT_ALERT = 0xFFFFB4AB
     const val NIGHT_ON_ALERT = 0xFF3B0000
+    const val NIGHT_FIELD_CONTAINER = 0xFF2A2A2A
+    const val NIGHT_MUTED_INK = 0xFFE0E0E0
     const val NIGHT_FEMALE = 0xFFF48FB1
     const val NIGHT_MALE = 0xFF90CAF9
 
@@ -67,6 +73,12 @@ object FieldPalette {
         "Secundario nocturno" to (NIGHT_ON_EARTH to NIGHT_EARTH),
         "Terciario nocturno" to (NIGHT_ON_SKY to NIGHT_SKY),
         "Alerta nocturna" to (NIGHT_ON_ALERT to NIGHT_ALERT),
+        "Etiqueta enfocada en campo" to (PASTURE to FIELD_CONTAINER),
+        "Texto en campo" to (INK to FIELD_CONTAINER),
+        "Etiqueta sin foco en campo" to (MUTED_INK to FIELD_CONTAINER),
+        "Etiqueta enfocada en campo nocturno" to (NIGHT_PASTURE to NIGHT_FIELD_CONTAINER),
+        "Texto en campo nocturno" to (NIGHT_INK to NIGHT_FIELD_CONTAINER),
+        "Etiqueta sin foco en campo nocturno" to (NIGHT_MUTED_INK to NIGHT_FIELD_CONTAINER),
         "Hembra nocturna" to (NIGHT_FEMALE to NIGHT_SURFACE),
         "Macho nocturno" to (NIGHT_MALE to NIGHT_SURFACE),
     )

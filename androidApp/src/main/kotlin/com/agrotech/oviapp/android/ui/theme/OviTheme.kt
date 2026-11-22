@@ -37,6 +37,9 @@ internal val FieldLightColors = lightColorScheme(
     onBackground = Color(FieldPalette.INK),
     surface = Color(FieldPalette.PAPER),
     onSurface = Color(FieldPalette.INK),
+    // Los TextField rellenos usan este fondo con la etiqueta en primary/onSurfaceVariant: también a 7:1.
+    surfaceContainerHighest = Color(FieldPalette.FIELD_CONTAINER),
+    onSurfaceVariant = Color(FieldPalette.MUTED_INK),
     error = Color(FieldPalette.ALERT),
     onError = Color(FieldPalette.ON_ALERT),
 )
@@ -52,6 +55,8 @@ internal val FieldDarkColors = darkColorScheme(
     onBackground = Color(FieldPalette.NIGHT_INK),
     surface = Color(FieldPalette.NIGHT_SURFACE),
     onSurface = Color(FieldPalette.NIGHT_INK),
+    surfaceContainerHighest = Color(FieldPalette.NIGHT_FIELD_CONTAINER),
+    onSurfaceVariant = Color(FieldPalette.NIGHT_MUTED_INK),
     error = Color(FieldPalette.NIGHT_ALERT),
     onError = Color(FieldPalette.NIGHT_ON_ALERT),
 )
