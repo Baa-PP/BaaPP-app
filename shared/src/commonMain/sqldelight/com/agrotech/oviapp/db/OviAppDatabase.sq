@@ -109,6 +109,10 @@ countPendingSyncEvents:
 SELECT COUNT(*) FROM pending_sync_events
 WHERE sync_status = 'PENDING';
 
+-- Filas cambiadas por el último INSERT/UPDATE de esta conexión (para writeAndEnqueueIfChanged).
+changedRows:
+SELECT changes();
+
 markSyncEventCompleted:
 UPDATE pending_sync_events
 SET sync_status = 'SYNCED'
