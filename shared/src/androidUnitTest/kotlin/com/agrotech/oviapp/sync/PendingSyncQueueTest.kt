@@ -108,6 +108,27 @@ class PendingSyncQueueTest {
     }
 
     @Test
+    fun changedRowsReportsWhatTheLastGuardedUpdateDid() {
+        insertWeight("w1")
+        val queries = database.oviAppDatabaseQueries
+
+        val hit = queue.writeAndEnqueueIfChanged(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {
+            queries.markSyncEventCompleted("no-existe")
+            queue.changedRows()
+        }
+
+        assertNull(hit, "un UPDATE que no encontró fila no encola nada")
+        assertEquals(0L, queue.pendingCount())
+
+        val existing = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+        val updated = queue.writeAndEnqueueIfChanged(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {
+            queries.markSyncEventCompleted(existing.mutationId)
+            queue.changedRows()
+        }
+        assertEquals(listOf(updated!!.mutationId), queue.pending().map { it.mutationId })
+    }
+
+    @Test
     fun syncedMutationsLeaveThePendingQueue() {
         val a = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
         nowMillis += 1
@@ -143,6 +164,25 @@ class PendingSyncQueueTest {
 
         assertEquals(listOf("zz", "aa", "new"), migrated.pending().map { it.mutationId })
         oldDriver.close()
+    }
+
+    @Test
+    fun theNextSequenceIsFoundThroughAnIndexNotAFullScan() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        val plan = driver.executeQuery(
+            identifier = null,
+            sql = "EXPLAIN QUERY PLAN SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events",
+            mapper = { cursor ->
+                val rows = mutableListOf<String>()
+                while (cursor.next().value) rows += cursor.getString(3).orEmpty()
+                app.cash.sqldelight.db.QueryResult.Value(rows.joinToString(" | "))
+            },
+            parameters = 0,
+        ).value
+
+        assertTrue("idx_pending_sync_events_sequence" in plan, "Plan de consulta: $plan")
+        driver.close()
     }
 
     private fun insertWeight(id: String) {
