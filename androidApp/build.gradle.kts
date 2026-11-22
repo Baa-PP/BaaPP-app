@@ -32,6 +32,7 @@ android {
 }
 
 dependencies {
+    implementation(libs.kotlinx.datetime)
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.material3:material3:1.3.1")

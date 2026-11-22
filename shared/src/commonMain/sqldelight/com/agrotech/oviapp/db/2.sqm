@@ -1,0 +1,2 @@
+-- Migration v2 -> v3: APP-19 etapa al morir (espejo de animales.etapa_al_morir del backend)
+ALTER TABLE local_animals ADD COLUMN life_stage_at_death TEXT;
