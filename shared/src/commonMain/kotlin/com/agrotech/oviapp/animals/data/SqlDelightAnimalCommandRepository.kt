@@ -55,18 +55,18 @@ class SqlDelightAnimalCommandRepository(
         val operation = if (isEdit) "UPDATE" else "CREATE"
 
         try {
-            val existingByFolio = database.oviAppDatabaseQueries
-                .selectAnimalByFolio(formState.ranchId, targetFolio)
-                .executeAsOneOrNull()
-
-            // Check duplicate folio locally
-            if (existingByFolio != null && existingByFolio.id != animalId) {
-                return@withContext AnimalSaveResult.DuplicateFolio(
-                    "Ya existe un ejemplar con el arete '$targetFolio' en este rancho."
-                )
-            }
-
             val result = database.transactionWithResult<AnimalSaveResult> {
+                val existingByFolio = database.oviAppDatabaseQueries
+                    .selectAnimalByFolio(formState.ranchId, targetFolio)
+                    .executeAsOneOrNull()
+
+                // Check duplicate folio locally inside transaction
+                if (existingByFolio != null && existingByFolio.id != animalId) {
+                    return@transactionWithResult AnimalSaveResult.DuplicateFolio(
+                        "Ya existe un ejemplar con el arete '$targetFolio' en este rancho."
+                    )
+                }
+
                 var targetRanchId = formState.ranchId
                 if (isEdit) {
                     val existingAnimal = database.oviAppDatabaseQueries
@@ -170,7 +170,16 @@ class SqlDelightAnimalCommandRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            AnimalSaveResult.Error(e.message ?: "Error guardando el ejemplar localmente.")
+            val msg = e.message.orEmpty()
+            if (msg.contains("UNIQUE", ignoreCase = true) &&
+                msg.contains("folio_interno", ignoreCase = true)
+            ) {
+                AnimalSaveResult.DuplicateFolio(
+                    "Ya existe un ejemplar con el arete '$targetFolio' en este rancho."
+                )
+            } else {
+                AnimalSaveResult.Error(e.message ?: "Error guardando el ejemplar localmente.")
+            }
         }
     }
 
@@ -205,6 +214,12 @@ class SqlDelightAnimalCommandRepository(
             reproductiveStatus = try { ReproductiveStatus.valueOf(row.reproductive_status) } catch (_: Exception) { ReproductiveStatus.EMPTY },
             status = try { AnimalStatus.valueOf(row.status) } catch (_: Exception) { AnimalStatus.ACTIVE }
         )
+    }
+
+    override suspend fun getLatestLocalPhotoPath(animalId: String): String? = withContext(ioDispatcher) {
+        database.oviAppDatabaseQueries
+            .selectLatestLocalPhotoByAnimalId(animalId)
+            .executeAsOneOrNull()
     }
 
     override suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> =

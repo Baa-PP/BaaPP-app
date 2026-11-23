@@ -136,8 +136,8 @@ WHERE ranch_id = :ranchId
   AND (:reproductiveStatus IS NULL OR reproductive_status = :reproductiveStatus)
   AND (
     :query = '' OR
-    folio_interno LIKE ('%' || :query || '%') OR
-    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+    folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
   )
 ORDER BY folio_interno ASC
 LIMIT :limit OFFSET :offset;
@@ -169,8 +169,8 @@ WHERE a.ranch_id = :ranchId
   AND a.status = 'ACTIVE'
   AND (
     :query = '' OR
-    a.folio_interno LIKE ('%' || :query || '%') OR
-    (a.siniiga_chip IS NOT NULL AND a.siniiga_chip LIKE ('%' || :query || '%'))
+    a.folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (a.siniiga_chip IS NOT NULL AND a.siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
   )
 ORDER BY a.folio_interno ASC
 LIMIT :limit OFFSET :offset;
@@ -189,8 +189,8 @@ WHERE ranch_id = :ranchId
   AND (:lifeStage IS NULL OR life_stage = :lifeStage)
   AND (
     :query = '' OR
-    folio_interno LIKE ('%' || :query || '%') OR
-    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+    folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
   )
 ORDER BY birth_date DESC
 LIMIT :limit OFFSET :offset;
@@ -198,8 +198,8 @@ LIMIT :limit OFFSET :offset;
 searchAnimalsPaged:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND status = 'ACTIVE' AND (
-    folio_interno LIKE ('%' || :query || '%') OR
-    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+    folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
 )
 ORDER BY folio_interno ASC
 LIMIT :limit OFFSET :offset;

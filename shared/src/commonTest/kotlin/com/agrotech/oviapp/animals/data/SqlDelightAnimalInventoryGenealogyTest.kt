@@ -152,6 +152,35 @@ class SqlDelightAnimalInventoryGenealogyTest {
         assertEquals("/data/user/0/app/files/pending_animal_photos/latest.jpg", detail.localPhotoPath)
     }
 
+    @Test
+    fun testSearchEscapesSqlLikeMetacharacters() = runTest {
+        val ranchId = "ranch-like"
+        insertAnimal(
+            id = UuidV7.generate(),
+            ranchId = ranchId,
+            folio = "OV_100%",
+            sex = Sex.FEMALE,
+            lifeStage = LifeStage.ADULT,
+            birthDate = "2023-01-01"
+        )
+        insertAnimal(
+            id = UuidV7.generate(),
+            ranchId = ranchId,
+            folio = "OVX1000",
+            sex = Sex.FEMALE,
+            lifeStage = LifeStage.ADULT,
+            birthDate = "2023-01-01"
+        )
+
+        val percentMatch = repository.getEwesPaged(ranchId = ranchId, query = "100%")
+        assertEquals(1, percentMatch.size)
+        assertEquals("OV_100%", percentMatch[0].folioInterno)
+
+        val underscoreMatch = repository.getEwesPaged(ranchId = ranchId, query = "OV_100")
+        assertEquals(1, underscoreMatch.size)
+        assertEquals("OV_100%", underscoreMatch[0].folioInterno)
+    }
+
     private fun insertAnimal(
         id: String,
         ranchId: String,

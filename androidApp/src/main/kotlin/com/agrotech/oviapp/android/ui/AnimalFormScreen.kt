@@ -57,9 +57,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.agrotech.oviapp.android.AnimalSaveUiState
 import com.agrotech.oviapp.animals.domain.model.AnimalFormState
-import com.agrotech.oviapp.animals.domain.model.AnimalSaveResult
 import com.agrotech.oviapp.animals.domain.repository.AnimalCommandRepository
+import com.agrotech.oviapp.domain.model.UuidV7
 import com.agrotech.oviapp.domain.model.AnimalCatalogs
 import com.agrotech.oviapp.domain.model.ConceptionMethod
 import com.agrotech.oviapp.domain.model.EntryReason
@@ -94,12 +95,16 @@ fun AnimalFormScreen(
     ranchId: String,
     animalIdToEdit: String? = null,
     commandRepository: AnimalCommandRepository,
+    saveState: AnimalSaveUiState = AnimalSaveUiState.Idle,
+    onSaveAnimal: (String, AnimalFormState) -> Unit = { _, _ -> },
+    onResetSaveState: () -> Unit = {},
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
+    val draftKey = rememberSaveable(ranchId, animalIdToEdit) { UuidV7.generate() }
 
     var folioInterno by rememberSaveable { mutableStateOf("") }
     var siniigaChip by rememberSaveable { mutableStateOf("") }
@@ -108,7 +113,7 @@ fun AnimalFormScreen(
     var breed by rememberSaveable { mutableStateOf("Pelifolk") }
     var color by rememberSaveable { mutableStateOf("") }
     var sex by rememberSaveable { mutableStateOf(Sex.FEMALE) }
-    var birthDate by rememberSaveable { mutableStateOf("2026-01-01") }
+    var birthDate by rememberSaveable { mutableStateOf("") }
     var weaningDate by rememberSaveable { mutableStateOf("") }
     var parturitionType by rememberSaveable { mutableStateOf(ParturitionType.SIMPLE) }
     var conceptionMethod by rememberSaveable { mutableStateOf(ConceptionMethod.MN) }
@@ -135,9 +140,10 @@ fun AnimalFormScreen(
     var siresList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
-    var isSaving by remember { mutableStateOf(false) }
+    val isSaving = saveState is AnimalSaveUiState.Saving && saveState.draftKey == draftKey
     var isLoadingExisting by remember { mutableStateOf(true) }
     var initLoadFailed by remember { mutableStateOf(false) }
+    var recordNotFound by remember { mutableStateOf(false) }
     var initRetryTrigger by remember { mutableIntStateOf(0) }
 
     var breedExpanded by remember { mutableStateOf(false) }
@@ -146,6 +152,29 @@ fun AnimalFormScreen(
     var damExpanded by remember { mutableStateOf(false) }
     var sireExpanded by remember { mutableStateOf(false) }
 
+    LaunchedEffect(saveState, draftKey) {
+        when (saveState) {
+            is AnimalSaveUiState.Success -> {
+                if (saveState.draftKey == draftKey) {
+                    committedPhotoPath = saveState.localPhotoPath
+                    draftCreatedPhotos
+                        .filter { it != saveState.localPhotoPath && it != committedPhotoPath }
+                        .forEach { obsolete -> deletePendingPhotoIfOwned(context.filesDir, obsolete) }
+                    draftCreatedPhotos = emptyList()
+                    onResetSaveState()
+                    onNavigateBack()
+                }
+            }
+            is AnimalSaveUiState.Error -> {
+                if (saveState.draftKey == draftKey) {
+                    errorMessage = saveState.message
+                    onResetSaveState()
+                }
+            }
+            else -> Unit
+        }
+    }
+
     val handleCancelAndCleanup: () -> Unit = {
         draftCreatedPhotos
             .filter { it != committedPhotoPath }
@@ -153,6 +182,7 @@ fun AnimalFormScreen(
                 deletePendingPhotoIfOwned(context.filesDir, path)
             }
         draftCreatedPhotos = emptyList()
+        onResetSaveState()
         onNavigateBack()
     }
 
@@ -164,6 +194,7 @@ fun AnimalFormScreen(
     LaunchedEffect(ranchId, animalIdToEdit, initRetryTrigger) {
         isLoadingExisting = true
         initLoadFailed = false
+        recordNotFound = false
         errorMessage = null
         try {
             damsList = commandRepository.getPotentialDams(ranchId)
@@ -192,7 +223,15 @@ fun AnimalFormScreen(
                     lifeStage = existing.lifeStage
                     reproductiveStatus = existing.reproductiveStatus
                     photoS3Key = existing.photoS3Key
+                    val existingLocalPhoto = commandRepository.getLatestLocalPhotoPath(animalIdToEdit)
+                    if (!existingLocalPhoto.isNullOrBlank()) {
+                        committedPhotoPath = existingLocalPhoto
+                        localPhotoPath = existingLocalPhoto
+                    }
                     hasLoadedExisting = true
+                } else {
+                    recordNotFound = true
+                    errorMessage = "No se encontró el ejemplar solicitado."
                 }
             }
         } catch (e: CancellationException) {
@@ -216,9 +255,9 @@ fun AnimalFormScreen(
                 var createdFile: File? = null
                 try {
                     val result = withContext(Dispatchers.IO) {
-                        val inputBytes = context.contentResolver.openInputStream(uri)?.use { stream ->
-                            readBoundedPhotoBytes(stream, MAX_SOURCE_PHOTO_BYTES)
-                        } ?: return@withContext null
+                        val stream = context.contentResolver.openInputStream(uri)
+                            ?: throw IllegalStateException("No se pudo abrir la fotografía seleccionada.")
+                        val inputBytes = stream.use { readBoundedPhotoBytes(it, MAX_SOURCE_PHOTO_BYTES) }
                         val compressedBytes = ImageCompressor.compressToTarget(inputBytes, 200 * 1024)
                         val photosDir = File(context.filesDir, PENDING_PHOTOS_DIR_NAME).apply { mkdirs() }
                         val photoFile = File(photosDir, "animal_${System.currentTimeMillis()}.jpg")
@@ -228,14 +267,14 @@ fun AnimalFormScreen(
                         }
                         photoFile.absolutePath to compressedBytes.size
                     }
-                    if (result != null) {
-                        val (newPath, compressedSize) = result
+                    val (newPath, compressedSize) = result
+                    if (localPhotoPath != committedPhotoPath) {
                         deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
-                        draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath } + newPath
-                        localPhotoPath = newPath
-                        photoSizeBytes = compressedSize
-                        photoS3Key = null
                     }
+                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath } + newPath
+                    localPhotoPath = newPath
+                    photoSizeBytes = compressedSize
+                    photoS3Key = null
                 } catch (e: CancellationException) {
                     createdFile?.let { deletePendingPhotoIfOwned(context.filesDir, it.absolutePath) }
                     throw e
@@ -278,6 +317,33 @@ fun AnimalFormScreen(
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = BaappPrimaryGreen)
+            }
+        } else if (recordNotFound) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(BaappBackground)
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = errorMessage ?: "El ejemplar solicitado no está disponible.",
+                        color = Color(0xFFB71C1C),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Button(
+                        onClick = handleCancelAndCleanup,
+                        modifier = Modifier.heightIn(min = 56.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                    ) {
+                        Text("← Volver")
+                    }
+                }
             }
         } else if (initLoadFailed) {
             Box(
@@ -747,57 +813,34 @@ fun AnimalFormScreen(
                 Button(
                     onClick = {
                         errorMessage = null
-                        isSaving = true
-                        scope.launch {
-                            val form = AnimalFormState(
-                                id = animalIdToEdit,
-                                ranchId = ranchId,
-                                folioInterno = folioInterno,
-                                siniigaChip = siniigaChip.takeIf { it.isNotBlank() },
-                                registroUno = registroUno.takeIf { it.isNotBlank() },
-                                adn = adn.takeIf { it.isNotBlank() },
-                                breed = breed,
-                                color = color,
-                                sex = sex,
-                                birthDate = birthDate,
-                                weaningDate = weaningDate.takeIf { it.isNotBlank() },
-                                parturitionType = parturitionType,
-                                conceptionMethod = conceptionMethod,
-                                sireId = sireId,
-                                damId = damId,
-                                externalSireFolio = externalSireFolio.takeIf { it.isNotBlank() },
-                                externalDamFolio = externalDamFolio.takeIf { it.isNotBlank() },
-                                entryReason = entryReason,
-                                criadorName = criadorName.takeIf { it.isNotBlank() },
-                                localPhotoPath = localPhotoPath,
-                                photoS3Key = photoS3Key,
-                                lifeStage = lifeStage,
-                                reproductiveStatus = reproductiveStatus
-                            )
-                            val res = commandRepository.saveAnimalOffline(form)
-                            isSaving = false
-                            when (res) {
-                                is AnimalSaveResult.Success -> {
-                                    committedPhotoPath = localPhotoPath
-                                    draftCreatedPhotos
-                                        .filter { it != localPhotoPath && it != committedPhotoPath }
-                                        .forEach { obsolete -> deletePendingPhotoIfOwned(context.filesDir, obsolete) }
-                                    draftCreatedPhotos = emptyList()
-                                    onNavigateBack()
-                                }
-                                is AnimalSaveResult.DuplicateFolio -> {
-                                    errorMessage = res.message
-                                }
-                                is AnimalSaveResult.ValidationError -> {
-                                    errorMessage = res.message
-                                }
-                                is AnimalSaveResult.Error -> {
-                                    errorMessage = res.message
-                                }
-                            }
-                        }
+                        val form = AnimalFormState(
+                            id = animalIdToEdit,
+                            ranchId = ranchId,
+                            folioInterno = folioInterno,
+                            siniigaChip = siniigaChip.takeIf { it.isNotBlank() },
+                            registroUno = registroUno.takeIf { it.isNotBlank() },
+                            adn = adn.takeIf { it.isNotBlank() },
+                            breed = breed,
+                            color = color,
+                            sex = sex,
+                            birthDate = birthDate,
+                            weaningDate = weaningDate.takeIf { it.isNotBlank() },
+                            parturitionType = parturitionType,
+                            conceptionMethod = conceptionMethod,
+                            sireId = sireId,
+                            damId = damId,
+                            externalSireFolio = externalSireFolio.takeIf { it.isNotBlank() },
+                            externalDamFolio = externalDamFolio.takeIf { it.isNotBlank() },
+                            entryReason = entryReason,
+                            criadorName = criadorName.takeIf { it.isNotBlank() },
+                            localPhotoPath = localPhotoPath,
+                            photoS3Key = photoS3Key,
+                            lifeStage = lifeStage,
+                            reproductiveStatus = reproductiveStatus
+                        )
+                        onSaveAnimal(draftKey, form)
                     },
-                    enabled = !isSaving && !isCompressingPhoto && !isLoadingExisting && !initLoadFailed,
+                    enabled = !isSaving && !isCompressingPhoto && !isLoadingExisting && !initLoadFailed && !recordNotFound,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 56.dp),

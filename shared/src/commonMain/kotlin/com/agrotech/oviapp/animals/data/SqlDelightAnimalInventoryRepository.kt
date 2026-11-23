@@ -34,7 +34,7 @@ class SqlDelightAnimalInventoryRepository(
         database.oviAppDatabaseQueries.selectEwesFilteredPaged(
             ranchId = ranchId,
             reproductiveStatus = reproductiveStatus?.name,
-            query = query.trim(),
+            query = escapeLikeQuery(query.trim()),
             limit = limit,
             offset = offset
         ).executeAsList().map { row ->
@@ -68,7 +68,7 @@ class SqlDelightAnimalInventoryRepository(
     ): List<RamInventoryItem> = withContext(ioDispatcher) {
         database.oviAppDatabaseQueries.selectRamsWithMetricsPaged(
             ranchId = ranchId,
-            query = query.trim(),
+            query = escapeLikeQuery(query.trim()),
             limit = limit,
             offset = offset
         ).executeAsList().map { row ->
@@ -107,7 +107,7 @@ class SqlDelightAnimalInventoryRepository(
         database.oviAppDatabaseQueries.selectLambsFilteredPaged(
             ranchId = ranchId,
             lifeStage = lifeStage?.name,
-            query = query.trim(),
+            query = escapeLikeQuery(query.trim()),
             limit = limit,
             offset = offset
         ).executeAsList().map { row ->
@@ -231,5 +231,13 @@ class SqlDelightAnimalInventoryRepository(
         AnimalStatus.valueOf(raw)
     } catch (_: Exception) {
         AnimalStatus.ACTIVE
+    }
+
+    private fun escapeLikeQuery(raw: String): String {
+        if (raw.isEmpty()) return raw
+        return raw
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
     }
 }

@@ -489,6 +489,7 @@ fun InventoryScreen(
                                         onClick = {
                                             loadError = null
                                             if (currentOffset == 0L) {
+                                                isLoading = true
                                                 initialRetryTrigger++
                                             } else {
                                                 paginationRetryTrigger++

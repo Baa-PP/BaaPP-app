@@ -50,6 +50,8 @@ import com.agrotech.oviapp.android.ui.InventoryScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
+import com.agrotech.oviapp.animals.domain.model.AnimalFormState
+import com.agrotech.oviapp.animals.domain.model.AnimalSaveResult
 import com.agrotech.oviapp.animals.domain.repository.AnimalCommandRepository
 import com.agrotech.oviapp.animals.domain.repository.AnimalInventoryRepository
 import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
@@ -94,7 +96,11 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
         private set
     var isBusy by mutableStateOf(false)
         private set
+    var animalSaveState by mutableStateOf<AnimalSaveUiState>(AnimalSaveUiState.Idle)
+        private set
 
+    private val lifecycleLock = Any()
+    private var isCleared = false
     private var cachedDriver: SqlDriver? = null
     private var cachedDatabase: OviAppDatabase? = null
     private var cachedAuthRepository: AuthRepository? = null
@@ -107,6 +113,47 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
 
     fun updateSession(newSession: AuthSession?) {
         currentSession = newSession
+    }
+
+    fun saveAnimal(draftKey: String, formState: AnimalFormState) {
+        val commandRepo = synchronized(lifecycleLock) {
+            if (isCleared) null else cachedCommandRepository
+        } ?: return
+        if (animalSaveState is AnimalSaveUiState.Saving) return
+
+        animalSaveState = AnimalSaveUiState.Saving(draftKey)
+        viewModelScope.launch {
+            try {
+                when (val res = commandRepo.saveAnimalOffline(formState)) {
+                    is AnimalSaveResult.Success -> {
+                        animalSaveState = AnimalSaveUiState.Success(
+                            draftKey = draftKey,
+                            localPhotoPath = formState.localPhotoPath
+                        )
+                    }
+                    is AnimalSaveResult.DuplicateFolio -> {
+                        animalSaveState = AnimalSaveUiState.Error(draftKey, res.message)
+                    }
+                    is AnimalSaveResult.ValidationError -> {
+                        animalSaveState = AnimalSaveUiState.Error(draftKey, res.message)
+                    }
+                    is AnimalSaveResult.Error -> {
+                        animalSaveState = AnimalSaveUiState.Error(draftKey, res.message)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                animalSaveState = AnimalSaveUiState.Error(
+                    draftKey,
+                    e.message ?: "Error guardando el ejemplar localmente."
+                )
+            }
+        }
+    }
+
+    fun resetAnimalSaveState() {
+        animalSaveState = AnimalSaveUiState.Idle
     }
 
     fun retryInitialization() {
@@ -153,32 +200,58 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
             val dependencies = withContext(Dispatchers.IO) {
                 val appContext = getApplication<Application>()
                 val sessionStorage = AndroidEncryptedSessionStorage(appContext)
-                val authRepo = cachedAuthRepository ?: AuthRepository(
-                    KtorAuthService(),
-                    sessionStorage
-                ).also { cachedAuthRepository = it }
+                val existingAuth = synchronized(lifecycleLock) {
+                    if (isCleared) return@withContext null
+                    cachedAuthRepository
+                }
+                val authRepo = existingAuth ?: AuthRepository(KtorAuthService(), sessionStorage)
+                val existingDriver = synchronized(lifecycleLock) {
+                    if (isCleared) null else cachedDriver
+                }
+                val newDriver = if (existingDriver == null) {
+                    DatabaseDriverFactory(appContext).createDriver()
+                } else {
+                    null
+                }
+                val driver = existingDriver ?: newDriver!!
 
-                val driver = cachedDriver ?: DatabaseDriverFactory(appContext).createDriver().also {
-                    cachedDriver = it
-                }
-                val database = cachedDatabase ?: OviAppDatabase(driver).also {
-                    cachedDatabase = it
-                }
-                val inventoryRepo = cachedInventoryRepository
-                    ?: SqlDelightAnimalInventoryRepository(database).also {
-                        cachedInventoryRepository = it
+                val published = synchronized(lifecycleLock) {
+                    if (isCleared) {
+                        false
+                    } else {
+                        if (cachedAuthRepository == null) cachedAuthRepository = authRepo
+                        if (cachedDriver == null) cachedDriver = driver
+                        true
                     }
-                val commandRepo = cachedCommandRepository
-                    ?: SqlDelightAnimalCommandRepository(
-                        database = database,
-                        sessionStorage = sessionStorage
-                    ).also {
-                        cachedCommandRepository = it
-                    }
+                }
+                if (!published) {
+                    if (existingAuth == null) authRepo.close()
+                    newDriver?.close()
+                    return@withContext null
+                }
+
+                val database = synchronized(lifecycleLock) {
+                    cachedDatabase ?: OviAppDatabase(driver).also { cachedDatabase = it }
+                }
+                val inventoryRepo = synchronized(lifecycleLock) {
+                    cachedInventoryRepository
+                        ?: SqlDelightAnimalInventoryRepository(database).also {
+                            cachedInventoryRepository = it
+                        }
+                }
+                val commandRepo = synchronized(lifecycleLock) {
+                    cachedCommandRepository
+                        ?: SqlDelightAnimalCommandRepository(
+                            database = database,
+                            sessionStorage = sessionStorage
+                        ).also {
+                            cachedCommandRepository = it
+                        }
+                }
 
                 val cachedSession = authRepo.getCachedSession()
                 AppDependencies(authRepo, inventoryRepo, commandRepo) to cachedSession
-            }
+            } ?: return
             currentSession = dependencies.second
             state = InitialState.Ready(dependencies.first)
         } catch (e: CancellationException) {
@@ -194,11 +267,27 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
 
     override fun onCleared() {
         super.onCleared()
-        cachedAuthRepository?.close()
-        cachedAuthRepository = null
-        cachedDriver?.close()
-        cachedDriver = null
+        val (authToClose, driverToClose) = synchronized(lifecycleLock) {
+            isCleared = true
+            val auth = cachedAuthRepository
+            val driver = cachedDriver
+            cachedAuthRepository = null
+            cachedDriver = null
+            cachedDatabase = null
+            cachedInventoryRepository = null
+            cachedCommandRepository = null
+            auth to driver
+        }
+        authToClose?.close()
+        driverToClose?.close()
     }
+}
+
+sealed interface AnimalSaveUiState {
+    data object Idle : AnimalSaveUiState
+    data class Saving(val draftKey: String) : AnimalSaveUiState
+    data class Success(val draftKey: String, val localPhotoPath: String?) : AnimalSaveUiState
+    data class Error(val draftKey: String, val message: String) : AnimalSaveUiState
 }
 
 data class AppDependencies(
@@ -243,7 +332,10 @@ private fun MainApp(
                 inventoryRepository = state.dependencies.inventoryRepository,
                 commandRepository = state.dependencies.commandRepository,
                 session = viewModel.currentSession,
-                onSessionChange = { viewModel.updateSession(it) }
+                onSessionChange = { viewModel.updateSession(it) },
+                animalSaveState = viewModel.animalSaveState,
+                onSaveAnimal = { draftKey, form -> viewModel.saveAnimal(draftKey, form) },
+                onResetAnimalSaveState = { viewModel.resetAnimalSaveState() }
             )
         }
         is InitialState.Error -> {
@@ -347,7 +439,10 @@ fun AppNavigation(
     inventoryRepository: AnimalInventoryRepository,
     commandRepository: AnimalCommandRepository,
     session: AuthSession?,
-    onSessionChange: (AuthSession?) -> Unit
+    onSessionChange: (AuthSession?) -> Unit,
+    animalSaveState: AnimalSaveUiState = AnimalSaveUiState.Idle,
+    onSaveAnimal: (String, AnimalFormState) -> Unit = { _, _ -> },
+    onResetAnimalSaveState: () -> Unit = {}
 ) {
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
@@ -446,6 +541,9 @@ fun AppNavigation(
                         ranchId = currentRanchId,
                         animalIdToEdit = screen.animalId,
                         commandRepository = commandRepository,
+                        saveState = animalSaveState,
+                        onSaveAnimal = onSaveAnimal,
+                        onResetSaveState = onResetAnimalSaveState,
                         onNavigateBack = {
                             val detailTarget = returnToDetailId
                             returnToDetailId = null

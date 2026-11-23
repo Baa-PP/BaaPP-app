@@ -122,7 +122,9 @@ class SqlDelightAnimalCommandRepositoryTest {
 
         val events = database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList()
         assertEquals(2, events.size)
-        assertEquals("UPDATE", events[1].operation)
+        val updateEvent = events.firstOrNull { it.mutation_id == updateRes.mutationId }
+        assertNotNull(updateEvent)
+        assertEquals("UPDATE", updateEvent.operation)
     }
 
     @Test

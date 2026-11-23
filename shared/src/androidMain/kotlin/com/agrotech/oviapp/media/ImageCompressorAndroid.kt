@@ -45,39 +45,47 @@ actual object ImageCompressor {
 
         var quality = 85
         var outputStream = ByteArrayOutputStream()
-        originalBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
-        var compressed = outputStream.toByteArray()
-
-        // Iteratively lower quality or resize if still exceeding maxBytes (~150-200 KB target)
         var currentBitmap = originalBitmap
-        while (compressed.size > maxBytes && quality > 40) {
-            quality -= 15
-            outputStream = ByteArrayOutputStream()
-            currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
-            compressed = outputStream.toByteArray()
-        }
+        try {
+            if (!originalBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)) {
+                throw IllegalStateException("No se pudo comprimir la fotografía.")
+            }
+            var compressed = outputStream.toByteArray()
 
-        // If still over budget after quality 40, downscale dimensions
-        while (compressed.size > maxBytes && currentBitmap.width > 400 && currentBitmap.height > 400) {
-            val scaleFactor = 0.75f
-            val newWidth = (currentBitmap.width * scaleFactor).roundToInt()
-            val newHeight = (currentBitmap.height * scaleFactor).roundToInt()
-            val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, newWidth, newHeight, true)
+            // Iteratively lower quality or resize if still exceeding maxBytes (~150-200 KB target)
+            while (compressed.size > maxBytes && quality > 40) {
+                quality -= 15
+                outputStream = ByteArrayOutputStream()
+                if (!currentBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)) {
+                    throw IllegalStateException("No se pudo comprimir la fotografía.")
+                }
+                compressed = outputStream.toByteArray()
+            }
+
+            // If still over budget after quality 40, downscale dimensions
+            while (compressed.size > maxBytes && currentBitmap.width > 400 && currentBitmap.height > 400) {
+                val scaleFactor = 0.75f
+                val newWidth = (currentBitmap.width * scaleFactor).roundToInt()
+                val newHeight = (currentBitmap.height * scaleFactor).roundToInt()
+                val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, newWidth, newHeight, true)
+                if (currentBitmap != originalBitmap) {
+                    currentBitmap.recycle()
+                }
+                currentBitmap = scaledBitmap
+                outputStream = ByteArrayOutputStream()
+                if (!currentBitmap.compress(Bitmap.CompressFormat.JPEG, 75, outputStream)) {
+                    throw IllegalStateException("No se pudo comprimir la fotografía.")
+                }
+                compressed = outputStream.toByteArray()
+            }
+
+            return compressed
+        } finally {
             if (currentBitmap != originalBitmap) {
                 currentBitmap.recycle()
             }
-            currentBitmap = scaledBitmap
-            outputStream = ByteArrayOutputStream()
-            currentBitmap.compress(Bitmap.CompressFormat.JPEG, 75, outputStream)
-            compressed = outputStream.toByteArray()
+            originalBitmap.recycle()
         }
-
-        if (currentBitmap != originalBitmap) {
-            currentBitmap.recycle()
-        }
-        originalBitmap.recycle()
-
-        return compressed
     }
 
     private fun applyExifOrientation(bitmap: Bitmap, inputBytes: ByteArray): Bitmap {

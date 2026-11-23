@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,9 +18,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Info
@@ -116,13 +117,6 @@ fun AnimalDetailScreen(
         }
     }
 
-    val scrollState = rememberScrollState()
-    val headerColor = when (detail?.animal?.sex) {
-        Sex.FEMALE -> BaappFemalePink
-        Sex.MALE -> BaappMaleBlue
-        null -> BaappPrimaryGreen
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -152,7 +146,11 @@ fun AnimalDetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = headerColor,
+                    containerColor = when (detail?.animal?.sex) {
+                        Sex.FEMALE -> BaappFemalePink
+                        Sex.MALE -> BaappMaleBlue
+                        null -> BaappPrimaryGreen
+                    },
                     titleContentColor = Color.White
                 )
             )
@@ -197,32 +195,61 @@ fun AnimalDetailScreen(
                 detail != null -> {
                     val data = detail!!
                     val animal = data.animal
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState)
-                            .padding(16.dp),
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        AnimalSummaryCard(animal = animal)
+                        item(key = "summary") {
+                            AnimalSummaryCard(animal = animal)
+                        }
 
-                        AnimalPhotoCard(
-                            folioInterno = animal.folioInterno,
-                            localPhotoPath = data.localPhotoPath,
-                            photoS3Key = animal.photoS3Key
-                        )
+                        item(key = "photo") {
+                            AnimalPhotoCard(
+                                folioInterno = animal.folioInterno,
+                                localPhotoPath = data.localPhotoPath,
+                                photoS3Key = animal.photoS3Key
+                            )
+                        }
 
-                        GenealogyParentsCard(
-                            animal = animal,
-                            dam = data.dam,
-                            sire = data.sire,
-                            onNavigateToAnimal = onNavigateToAnimal
-                        )
+                        item(key = "parents") {
+                            GenealogyParentsCard(
+                                animal = animal,
+                                dam = data.dam,
+                                sire = data.sire,
+                                onNavigateToAnimal = onNavigateToAnimal
+                            )
+                        }
 
-                        OffspringListCard(
-                            offspring = data.offspring,
-                            onNavigateToAnimal = onNavigateToAnimal
-                        )
+                        item(key = "offspring_header") {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        text = "Descendencia / Crías (${data.offspring.size})",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                    )
+                                    if (data.offspring.isEmpty()) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "No tiene crías registradas en el rebaño.",
+                                            style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        items(data.offspring, key = { it.id }) { child ->
+                            OffspringItemRow(
+                                child = child,
+                                onClick = { onNavigateToAnimal(child.id) }
+                            )
+                        }
                     }
                 }
             }
