@@ -52,21 +52,6 @@ import com.agrotech.oviapp.summary.RanchSummary
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** Sin rancho asignado o si la base local falla, la sección lo dice en lugar de mostrar ceros falsos. */
-private suspend fun loadRanchSummary(
-    ranchId: String?,
-    loadSummary: suspend (ranchId: String) -> RanchSummary,
-): RanchSummaryUi {
-    if (ranchId == null) return RanchSummaryUi.Unavailable
-    return try {
-        RanchSummaryUi.Ready(loadSummary(ranchId))
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (failure: Exception) {
-        RanchSummaryUi.Unavailable
-    }
-}
-
 private val BaappPrimaryGreen = Color(0xFF1B5E20)
 private val BaappBackground = Color(0xFFF7F9F7)
 private val BaappSoftGreen = Color(0xFFE8F5E9)
@@ -206,9 +191,8 @@ fun HomeScreen(
 
             // Resumen del rancho (APP-25): se recalcula cada vez que se vuelve a la pantalla principal.
             if (loadSummary != null) {
-                val ranchId = session.ranchId
-                var summaryState by remember(ranchId) { mutableStateOf<RanchSummaryUi>(RanchSummaryUi.Loading) }
-                LaunchedEffect(ranchId) { summaryState = loadRanchSummary(ranchId, loadSummary) }
+                var summaryState by remember(session) { mutableStateOf<RanchSummaryUi>(RanchSummaryUi.Loading) }
+                LaunchedEffect(session) { summaryState = loadRanchSummary(session, loadSummary) }
                 RanchSummarySection(summaryState)
                 Spacer(modifier = Modifier.height(20.dp))
             }

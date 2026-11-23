@@ -20,7 +20,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.summary.RanchSummary
+import kotlinx.coroutines.CancellationException
 
 private val SummaryInk = Color(0xFF111111)
 private val SummaryPaper = Color(0xFFFFFFFF)
@@ -31,7 +33,35 @@ private val SummaryAlertInk = Color(0xFF5D4300)
 sealed interface RanchSummaryUi {
     data object Loading : RanchSummaryUi
     data class Ready(val summary: RanchSummary) : RanchSummaryUi
-    data object Unavailable : RanchSummaryUi
+
+    /** Sin permiso de Lectura: igual que el inventario, no se muestran conteos del rancho. */
+    data object NoPermission : RanchSummaryUi
+
+    /** La sesión no tiene rancho asignado (o viene vacío). */
+    data object Unassigned : RanchSummaryUi
+
+    /** Falló la lectura de la base local; no es culpa de la sesión. */
+    data object LoadError : RanchSummaryUi
+}
+
+/**
+ * Decide qué mostrar en el resumen: exige el mismo permiso que el inventario y un rancho asignado antes
+ * de leer la base, y distingue un fallo de lectura de una sesión sin rancho.
+ */
+internal suspend fun loadRanchSummary(
+    session: AuthSession,
+    loadSummary: suspend (ranchId: String) -> RanchSummary,
+): RanchSummaryUi {
+    if (!session.uiCapabilities().canReadInventory) return RanchSummaryUi.NoPermission
+    val ranchId = session.ranchId
+    if (ranchId.isNullOrBlank()) return RanchSummaryUi.Unassigned
+    return try {
+        RanchSummaryUi.Ready(loadSummary(ranchId))
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        RanchSummaryUi.LoadError
+    }
 }
 
 /**
@@ -48,8 +78,17 @@ fun RanchSummarySection(state: RanchSummaryUi, modifier: Modifier = Modifier) {
         )
         when (state) {
             RanchSummaryUi.Loading -> Text("Calculando…", modifier = Modifier.padding(top = 8.dp))
-            RanchSummaryUi.Unavailable -> Text(
+            RanchSummaryUi.NoPermission -> Text(
+                "Sin permiso de lectura para ver los conteos del rancho.",
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            RanchSummaryUi.Unassigned -> Text(
                 "El resumen se muestra cuando la sesión tiene un rancho asignado.",
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            RanchSummaryUi.LoadError -> Text(
+                "No se pudieron leer los datos guardados en este celular. Intenta de nuevo al volver a esta pantalla.",
+                color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(top = 8.dp),
             )
             is RanchSummaryUi.Ready -> {
