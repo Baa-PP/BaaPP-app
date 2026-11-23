@@ -23,6 +23,7 @@ CREATE TABLE local_animals (
     mortality_date TEXT,
     mortality_cause TEXT,
     life_stage TEXT NOT NULL,
+    life_stage_at_death TEXT,
     reproductive_status TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -43,6 +44,7 @@ CREATE TABLE local_birth_events (
     local_photo_path TEXT,
     registered_by_user_id TEXT,
     notes TEXT,
+    draft_key TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -67,7 +69,10 @@ CREATE TABLE pending_sync_events (
     occurred_at TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     local_photo_path TEXT,
-    sync_status TEXT NOT NULL DEFAULT 'PENDING'
+    sync_status TEXT NOT NULL DEFAULT 'PENDING',
+    -- Orden de escritura (FIFO). occurred_at tiene precisión de milisegundo y depende del reloj del
+    -- celular, y mutation_id es UUIDv7 con bits aleatorios: ninguno de los dos garantiza el orden causal.
+    sequence INTEGER NOT NULL DEFAULT 0
 );
 
 -- Performance Indexes
@@ -82,15 +87,50 @@ CREATE INDEX idx_local_animals_weaning_pending ON local_animals (birth_date, sta
 
 CREATE INDEX idx_local_birth_events_ranch_date ON local_birth_events (ranch_id, birth_date DESC);
 CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
+CREATE UNIQUE INDEX idx_local_birth_events_draft_key ON local_birth_events (draft_key);
 
 CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
 
+CREATE INDEX idx_pending_sync_events_status_sequence ON pending_sync_events (sync_status, sequence);
+-- MAX(sequence) en cada inserción: con sequence a la izquierda SQLite lo resuelve sin recorrer el historial.
+CREATE INDEX idx_pending_sync_events_sequence ON pending_sync_events (sequence);
+
 -- Queries: sync
+insertSyncEvent:
+INSERT INTO pending_sync_events (
+    mutation_id, entity_type, operation, occurred_at, payload_json, local_photo_path, sync_status, sequence
+) VALUES (
+    ?, ?, ?, ?, ?, ?, 'PENDING',
+    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events)
+);
+
 selectPendingSyncEvents:
 SELECT * FROM pending_sync_events
 WHERE sync_status = 'PENDING'
-ORDER BY occurred_at ASC;
+ORDER BY sequence ASC;
+
+countPendingSyncEvents:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status = 'PENDING';
+
+countPendingSyncEventsByLocalPhoto:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status != 'SYNCED' AND local_photo_path = :localPhotoPath;
+
+-- Filas cambiadas por el último INSERT/UPDATE de esta conexión (para writeAndEnqueueIfChanged).
+changedRows:
+SELECT changes();
+
+selectLatestLocalPhotoByAnimalId:
+SELECT local_photo_path FROM pending_sync_events
+WHERE entity_type = 'ANIMAL'
+  AND (
+    payload_json LIKE ('%"id":"' || :animalId || '"%') ESCAPE '\' OR
+    payload_json LIKE ('%"animalId":"' || :animalId || '"%') ESCAPE '\'
+  )
+ORDER BY sequence DESC
+LIMIT 1;
 
 markSyncEventCompleted:
 UPDATE pending_sync_events
@@ -110,17 +150,79 @@ WHERE ranch_id = :ranchId AND sex = :sex AND status = 'ACTIVE'
 ORDER BY folio_interno ASC
 LIMIT :limit OFFSET :offset;
 
+selectEwesFilteredPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId
+  AND sex = 'FEMALE'
+  AND life_stage = 'ADULT'
+  AND status = 'ACTIVE'
+  AND (:reproductiveStatus IS NULL OR reproductive_status = :reproductiveStatus)
+  AND (
+    :query = '' OR
+    folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
+  )
+ORDER BY folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
+selectRamsWithMetricsPaged:
+SELECT
+    a.*,
+    (
+        SELECT wm.scrotal_circumference_cm
+        FROM local_weight_measurements wm
+        WHERE wm.animal_id = a.id AND wm.scrotal_circumference_cm IS NOT NULL
+        ORDER BY wm.measurement_date DESC, wm.id DESC
+        LIMIT 1
+    ) AS latest_scrotal_circumference_cm,
+    (
+        SELECT COUNT(*)
+        FROM local_animals c
+        WHERE c.sire_id = a.id AND c.ranch_id = a.ranch_id AND c.status = 'ACTIVE'
+    ) AS active_offspring_count,
+    (
+        SELECT COUNT(*)
+        FROM local_animals c
+        WHERE c.sire_id = a.id AND c.ranch_id = a.ranch_id
+    ) AS total_offspring_count
+FROM local_animals a
+WHERE a.ranch_id = :ranchId
+  AND a.sex = 'MALE'
+  AND a.life_stage = 'ADULT'
+  AND a.status = 'ACTIVE'
+  AND (
+    :query = '' OR
+    a.folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (a.siniiga_chip IS NOT NULL AND a.siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
+  )
+ORDER BY a.folio_interno ASC
+LIMIT :limit OFFSET :offset;
+
 selectLambsPaged:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND status = 'ACTIVE' AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
 ORDER BY birth_date DESC
 LIMIT :limit OFFSET :offset;
 
+selectLambsFilteredPaged:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId
+  AND status = 'ACTIVE'
+  AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+  AND (:lifeStage IS NULL OR life_stage = :lifeStage)
+  AND (
+    :query = '' OR
+    folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
+  )
+ORDER BY birth_date DESC
+LIMIT :limit OFFSET :offset;
+
 searchAnimalsPaged:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND status = 'ACTIVE' AND (
-    folio_interno LIKE ('%' || :query || '%') OR
-    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%'))
+    folio_interno LIKE ('%' || :query || '%') ESCAPE '\' OR
+    (siniiga_chip IS NOT NULL AND siniiga_chip LIKE ('%' || :query || '%') ESCAPE '\')
 )
 ORDER BY folio_interno ASC
 LIMIT :limit OFFSET :offset;
@@ -129,13 +231,28 @@ selectAnimalById:
 SELECT * FROM local_animals
 WHERE id = :id;
 
+selectAnimalForWeighing:
+SELECT id, ranch_id, sex, birth_date, status, mortality_date
+FROM local_animals
+WHERE id = :id;
+
 selectAnimalByFolio:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND folio_interno = :folioInterno;
 
+selectAnimalBySiniigaChip:
+SELECT id FROM local_animals
+WHERE siniiga_chip = :siniigaChip
+LIMIT 1;
+
 selectOffspringByParent:
 SELECT * FROM local_animals
 WHERE dam_id = :parentId OR sire_id = :parentId
+ORDER BY birth_date DESC;
+
+selectOffspringByParentInRanch:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND (dam_id = :parentId OR sire_id = :parentId)
 ORDER BY birth_date DESC;
 
 insertAnimal:
@@ -185,10 +302,55 @@ SET ranch_id = ?,
     updated_at = ?
 WHERE id = ?;
 
+updateAnimalFormFields:
+UPDATE local_animals
+SET ranch_id = ?,
+    folio_interno = ?,
+    siniiga_chip = ?,
+    registro_uno = ?,
+    adn = ?,
+    breed = ?,
+    color = ?,
+    sex = ?,
+    birth_date = ?,
+    weaning_date = ?,
+    parturition_type = ?,
+    conception_method = ?,
+    sire_id = ?,
+    dam_id = ?,
+    external_sire_folio = ?,
+    external_dam_folio = ?,
+    entry_reason = ?,
+    criador_name = ?,
+    photo_s3_key = ?,
+    life_stage = ?,
+    reproductive_status = ?,
+    updated_at = ?
+WHERE id = ?;
+
 updateAnimalStatus:
 UPDATE local_animals
 SET status = :status, mortality_date = :mortalityDate, mortality_cause = :mortalityCause, updated_at = CURRENT_TIMESTAMP
 WHERE id = :id;
+
+-- APP-19: bajas sin borrado físico. Nunca hay DELETE sobre local_animals (NoPhysicalDeleteTest).
+markAnimalDeceased:
+UPDATE local_animals
+SET status = 'DECEASED', mortality_date = :mortalityDate, mortality_cause = :mortalityCause,
+    life_stage_at_death = :lifeStageAtDeath, updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE';
+
+markAnimalSold:
+UPDATE local_animals
+SET status = 'SOLD', updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE';
+
+selectMortalitySummary:
+SELECT mortality_cause, life_stage_at_death, COUNT(*) AS deaths
+FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'DECEASED' AND mortality_date BETWEEN :fromDate AND :toDate
+GROUP BY mortality_cause, life_stage_at_death
+ORDER BY deaths DESC, mortality_cause;
 
 -- Queries: local_birth_events (paginated & indexed)
 selectBirthEventsByRanchPaged:
@@ -201,22 +363,36 @@ selectBirthEventById:
 SELECT * FROM local_birth_events
 WHERE id = :id;
 
+selectBirthEventByDraftKey:
+SELECT * FROM local_birth_events
+WHERE draft_key = :draftKey
+LIMIT 1;
+
 selectBirthEventsByDam:
 SELECT * FROM local_birth_events
 WHERE dam_id = :damId
 ORDER BY birth_date DESC;
 
+countBirthEventsByLocalPhoto:
+SELECT COUNT(*) FROM local_birth_events
+WHERE local_photo_path = :localPhotoPath;
+
+markMotherLactatingAfterBirth:
+UPDATE local_animals
+SET reproductive_status = 'LACTATING', updated_at = :updatedAt
+WHERE id = :id AND ranch_id = :ranchId AND status = 'ACTIVE';
+
 insertBirthEvent:
-INSERT OR REPLACE INTO local_birth_events (
+INSERT INTO local_birth_events (
     id, ranch_id, dam_id, sire_id, birth_date,
     live_births, stillborns, parturition_type, conception_method,
     photo_s3_key, local_photo_path, registered_by_user_id, notes,
-    created_at, updated_at
+    draft_key, created_at, updated_at
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?,
-    ?, ?
+    ?, ?, ?
 );
 
 -- Queries: local_weight_measurements (paginated & indexed)
@@ -232,6 +408,13 @@ WHERE animal_id = :animalId
 ORDER BY measurement_date DESC
 LIMIT 1;
 
+-- APP-15: historial completo para la GDP local, en el mismo orden que el backend (fecha, id).
+selectWeightsByAnimalChronological:
+SELECT id, milestone, measurement_date, weight_kg, scrotal_circumference_cm
+FROM local_weight_measurements
+WHERE animal_id = :animalId
+ORDER BY measurement_date, id;
+
 insertWeightMeasurement:
 INSERT OR REPLACE INTO local_weight_measurements (
     id, ranch_id, animal_id, milestone, weight_kg,
@@ -242,3 +425,42 @@ INSERT OR REPLACE INTO local_weight_measurements (
     ?, ?, ?,
     ?, ?
 );
+
+-- APP-16: crías sin destetar para la lista de destetes (usa idx_local_animals_weaning_pending).
+selectUnweanedAnimals:
+SELECT id, folio_interno, sex, birth_date
+FROM local_animals
+WHERE ranch_id = :ranchId
+  AND status = 'ACTIVE'
+  -- Solo crías: un adulto comprado sin fecha de destete no debe aparecer como destete pendiente.
+  AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+  AND weaning_date IS NULL
+  AND mortality_date IS NULL
+  AND birth_date <= :bornOnOrBefore
+ORDER BY birth_date, folio_interno;
+-- APP-18: Confirmar destete (espejo de ConfirmWeaningUseCase de BE-009)
+selectLambForWeaning:
+SELECT id, ranch_id, sex, birth_date, weaning_date, status, mortality_date, dam_id, life_stage
+FROM local_animals
+WHERE id = :id;
+
+selectWeaningWeightForAnimal:
+SELECT id, weight_kg, scrotal_circumference_cm, measurement_date
+FROM local_weight_measurements
+WHERE animal_id = :animalId AND milestone = 'WEANING'
+ORDER BY measurement_date DESC, id DESC
+LIMIT 1;
+
+updateAnimalWeaning:
+UPDATE local_animals
+SET weaning_date = :weaningDate, life_stage = :lifeStage, status = :status, updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE' AND weaning_date IS NULL;
+
+selectReproductiveStatus:
+SELECT reproductive_status FROM local_animals
+WHERE id = :id AND ranch_id = :ranchId;
+
+markMotherEmptyAfterWeaning:
+UPDATE local_animals
+SET reproductive_status = 'EMPTY', updated_at = :updatedAt
+WHERE id = :id AND ranch_id = :ranchId AND reproductive_status = 'LACTATING';

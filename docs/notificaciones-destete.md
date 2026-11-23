@@ -13,7 +13,7 @@ backend (BE-015) manda cuando un cordero cumple la edad de destete.
    - token ya registrado → no reenvía;
    - error de red o 5xx → `Result.retry()`, el token sigue pendiente.
 3. Al llegar un push con `type = WEANING_DUE`, `OviMessagingService` muestra una notificación en el
-   canal **Destetes**. Al tocarla se abre `MainActivity` con el animal en los extras del intent.
+   canal **Destetes**. Al tocarla se abre la ficha del cordero.
 
 ## Contrato con el backend (BE-015)
 
@@ -44,7 +44,7 @@ Si el backend también manda el bloque `notification`, su título y texto se usa
   compila y funciona, pero no se inicializa Firebase ni llegan pushes.
 - URL del backend: `./gradlew assembleDebug -Pbaapp.apiBaseUrl=https://...` (por defecto
   `http://10.0.2.2:8080`, el host visto desde el emulador).
-- Login (APP-02/03): asignar `Notifications.session` con la sesión real, encolar
-  `DeviceTokenWorker` después de entrar y llamar a `Notifications.registrar(context).onLogout()` al salir.
-- Pantalla de destetes (APP-16): reemplazar el texto provisional de `MainActivity` por la navegación
-  al animal de `WeaningAlert`.
+- Sesión: `MainAppViewModel` entrega el JWT de la sesión activa (`Notifications.session`), encola
+  `DeviceTokenWorker` al iniciar sesión y llama a `onLogout()` al salir o cambiar de usuario.
+- Al tocar el aviso se abre la ficha del cordero (`AppScreen.AnimalDetail`) si es del rancho de la
+  sesión activa.

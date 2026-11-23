@@ -1,0 +1,3 @@
+-- Migration v4 -> v5: APP-12 idempotencia por draft_key en local_birth_events
+ALTER TABLE local_birth_events ADD COLUMN draft_key TEXT;
+CREATE UNIQUE INDEX idx_local_birth_events_draft_key ON local_birth_events (draft_key);

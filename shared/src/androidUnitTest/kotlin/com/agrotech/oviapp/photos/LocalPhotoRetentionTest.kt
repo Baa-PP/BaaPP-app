@@ -1,0 +1,143 @@
+package com.agrotech.oviapp.photos
+
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import com.agrotech.oviapp.db.OviAppDatabase
+import com.agrotech.oviapp.sync.PendingSyncQueue
+import com.agrotech.oviapp.sync.SyncEntityType
+import com.agrotech.oviapp.sync.SyncOperation
+import java.nio.file.Files
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class LocalPhotoRetentionTest {
+
+    @Test
+    fun photoPersistsLocallyWhileSyncIsPendingAndDeletesAfterS3UploadCompletes() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        val database = OviAppDatabase(driver)
+        val syncQueue = PendingSyncQueue(database)
+        val retention = LocalPhotoRetentionManager(database)
+
+        val tempDir = Files.createTempDirectory("baapp_photo_test").toFile()
+        try {
+            val validCompressed = CompressedPhoto(
+                bytes = ByteArray(175 * 1024) { 1 },
+                format = PhotoFormat.JPEG
+            )
+            val stored = retention.persistPendingPhoto(
+                basePendingDirPath = tempDir.absolutePath,
+                compressed = validCompressed,
+                photoId = "test-175kb"
+            )
+            assertEquals(175 * 1024, stored.sizeBytes)
+            assertTrue(LocalPhotoFileOps.exists(stored.localPhotoPath))
+
+            val mutation = syncQueue.writeAndEnqueue(
+                entityType = SyncEntityType.BIRTH_EVENT,
+                operation = SyncOperation.CREATE,
+                payloadJson = """{"birthEventId":"b1"}""",
+                localPhotoPath = stored.localPhotoPath
+            ) { }
+
+            // Must NOT delete while mutation is still PENDING S3 upload
+            assertTrue(retention.isReferencedByPendingUpload(stored.localPhotoPath))
+            assertFalse(retention.deleteIfUploadedAndUnreferenced(stored.localPhotoPath))
+            assertTrue(LocalPhotoFileOps.exists(stored.localPhotoPath))
+
+            // Once S3 upload finishes and mutation is marked SYNCED, cleanup deletes the local file
+            database.oviAppDatabaseQueries.markSyncEventCompleted(mutation.mutationId)
+            assertFalse(retention.isReferencedByPendingUpload(stored.localPhotoPath))
+            assertTrue(retention.deleteIfUploadedAndUnreferenced(stored.localPhotoPath))
+            assertFalse(LocalPhotoFileOps.exists(stored.localPhotoPath))
+        } finally {
+            tempDir.deleteRecursively()
+            driver.close()
+        }
+    }
+
+    @Test
+    fun persistPendingPhotoRejectsBytesAbove200KbLimit() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        val database = OviAppDatabase(driver)
+        val retention = LocalPhotoRetentionManager(database)
+        val tempDir = Files.createTempDirectory("baapp_photo_limit_test").toFile()
+        try {
+            val oversizedWithStaleMetadata = CompressedPhoto(
+                bytes = ByteArray(PhotoCompressionConfig.MAX_TARGET_BYTES + 1),
+                format = PhotoFormat.WEBP,
+                sizeBytes = 1024
+            )
+            assertFailsWith<IllegalArgumentException> {
+                retention.persistPendingPhoto(tempDir.absolutePath, oversizedWithStaleMetadata, "oversized")
+            }
+
+            val validWithStaleMetadata = CompressedPhoto(
+                bytes = ByteArray(160 * 1024),
+                format = PhotoFormat.JPEG,
+                sizeBytes = 1024
+            )
+            val stored = retention.persistPendingPhoto(tempDir.absolutePath, validWithStaleMetadata, "valid-stale")
+            assertEquals(160 * 1024, stored.sizeBytes)
+        } finally {
+            tempDir.deleteRecursively()
+            driver.close()
+        }
+    }
+
+    @Test
+    fun rejectsTraversalZeroBytesAndNonCanonicalRetentionBypass() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        val database = OviAppDatabase(driver)
+        val syncQueue = PendingSyncQueue(database)
+        val retention = LocalPhotoRetentionManager(database)
+        val tempDir = Files.createTempDirectory("baapp_photo_sec_test").toFile()
+        val outsideFile = Files.createTempFile("baapp_outside", ".txt").toFile()
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                retention.persistPendingPhoto(
+                    tempDir.absolutePath,
+                    CompressedPhoto(ByteArray(1024) { 1 }, PhotoFormat.JPEG),
+                    photoId = "../escape"
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                retention.persistPendingPhoto(
+                    tempDir.absolutePath,
+                    CompressedPhoto(ByteArray(0), PhotoFormat.JPEG),
+                    photoId = "empty-photo"
+                )
+            }
+
+            val stored = retention.persistPendingPhoto(
+                tempDir.absolutePath,
+                CompressedPhoto(ByteArray(4096) { 2 }, PhotoFormat.JPEG),
+                photoId = "canonical-check"
+            )
+            syncQueue.writeAndEnqueue(
+                entityType = SyncEntityType.BIRTH_EVENT,
+                operation = SyncOperation.CREATE,
+                payloadJson = """{"id":"b1"}""",
+                localPhotoPath = stored.localPhotoPath
+            ) { }
+
+            val nonCanonical = "${tempDir.absolutePath}${java.io.File.separator}.${java.io.File.separator}photo_canonical-check.jpg"
+            assertTrue(retention.isReferencedByPendingUpload(nonCanonical))
+            assertFalse(retention.deleteIfUploadedAndUnreferenced(nonCanonical, tempDir.absolutePath))
+            assertTrue(LocalPhotoFileOps.exists(stored.localPhotoPath))
+
+            // Directory confinement prevents deleting files outside allowedDirectoryPath
+            assertFalse(retention.deleteIfUploadedAndUnreferenced(outsideFile.absolutePath, tempDir.absolutePath))
+            assertTrue(outsideFile.exists())
+        } finally {
+            outsideFile.delete()
+            tempDir.deleteRecursively()
+            driver.close()
+        }
+    }
+}

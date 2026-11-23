@@ -1,0 +1,347 @@
+package com.agrotech.oviapp.births.data
+
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import com.agrotech.oviapp.births.domain.model.BirthEventDraft
+import com.agrotech.oviapp.births.domain.model.BirthSaveResult
+import com.agrotech.oviapp.births.domain.model.LiveOffspringDraft
+import com.agrotech.oviapp.db.OviAppDatabase
+import com.agrotech.oviapp.domain.model.AnimalStatus
+import com.agrotech.oviapp.domain.model.ConceptionMethod
+import com.agrotech.oviapp.domain.model.EntryReason
+import com.agrotech.oviapp.domain.model.LifeStage
+import com.agrotech.oviapp.domain.model.ParturitionType
+import com.agrotech.oviapp.domain.model.ReproductiveStatus
+import com.agrotech.oviapp.domain.model.Sex
+import com.agrotech.oviapp.domain.model.UuidV7
+import kotlinx.coroutines.test.runTest
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
+
+class SqlDelightBirthEventRepositoryTest {
+
+    private lateinit var driver: JdbcSqliteDriver
+    private lateinit var database: OviAppDatabase
+    private lateinit var repository: SqlDelightBirthEventRepository
+
+    @BeforeTest
+    fun setup() {
+        driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        database = OviAppDatabase(driver)
+        repository = SqlDelightBirthEventRepository(
+            database = database,
+            photoExistsCheck = { true }
+        )
+    }
+
+    @AfterTest
+    fun tearDown() {
+        driver.close()
+    }
+
+    @Test
+    fun testCannotSaveBirthEventWithoutPhoto() = runTest {
+        val ranchId = "ranch-birth"
+        val damId = insertAdult(ranchId, "MADRE-01", Sex.FEMALE)
+
+        val draftWithoutPhoto = BirthEventDraft(
+            ranchId = ranchId,
+            damId = damId,
+            birthDateIso = "2026-11-20",
+            stillborns = 0,
+            liveOffspring = listOf(
+                LiveOffspringDraft("CRIA-01", Sex.FEMALE, "Blanco", "3.4")
+            ),
+            localPhotoPath = null
+        )
+
+        val result = repository.saveBirthEventOffline(draftWithoutPhoto, "2026-11-22")
+        assertIs<BirthSaveResult.ValidationError>(result)
+        assertTrue(result.message.contains("fotografía", ignoreCase = true))
+        assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
+    }
+
+    @Test
+    fun testOfflineBirthCreatesLinkedOffspringWeightsAndSyncEvent() = runTest {
+        val ranchId = "ranch-offline-birth"
+        val damId = insertAdult(ranchId, "MADRE-10", Sex.FEMALE)
+        val sireId = insertAdult(ranchId, "SEMENTAL-05", Sex.MALE)
+
+        val draft = BirthEventDraft(
+            ranchId = ranchId,
+            damId = damId,
+            sireId = sireId,
+            conceptionMethod = ConceptionMethod.IA,
+            birthDateIso = "2026-11-20",
+            stillborns = 1,
+            liveOffspring = listOf(
+                LiveOffspringDraft("CRIA-10-A", Sex.FEMALE, "Blanco", "3.2"),
+                LiveOffspringDraft("CRIA-10-B", Sex.MALE, "Pinto", "3.6")
+            ),
+            localPhotoPath = "/data/user/0/app/files/pending_birth_photos/birth_1.jpg"
+        )
+
+        assertEquals(ParturitionType.TRIPLET, draft.deducedParturitionType())
+
+        val result = repository.saveBirthEventOffline(draft, "2026-11-22")
+        val success = assertIs<BirthSaveResult.Success>(result)
+        assertEquals(2, success.offspringIds.size)
+
+        val birthEvent = database.oviAppDatabaseQueries
+            .selectBirthEventById(success.birthEventId)
+            .executeAsOneOrNull()
+        assertEquals(2L, birthEvent?.live_births)
+        assertEquals(1L, birthEvent?.stillborns)
+        assertEquals(ParturitionType.TRIPLET.name, birthEvent?.parturition_type)
+        assertEquals("/data/user/0/app/files/pending_birth_photos/birth_1.jpg", birthEvent?.local_photo_path)
+
+        val linkedOffspring = database.oviAppDatabaseQueries
+            .selectOffspringByParent(damId)
+            .executeAsList()
+        assertEquals(2, linkedOffspring.size)
+        assertTrue(linkedOffspring.all { it.birth_event_id == success.birthEventId })
+
+        val weights = database.oviAppDatabaseQueries
+            .selectWeightsByAnimalPaged(success.offspringIds[0], 10, 0)
+            .executeAsList()
+        assertEquals(1, weights.size)
+        assertEquals("BIRTH", weights[0].milestone)
+        assertEquals(3.2, weights[0].weight_kg)
+
+        val syncEvents = database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList()
+        assertEquals(1, syncEvents.size)
+        assertEquals("BIRTH_EVENT", syncEvents[0].entity_type)
+        assertEquals("CREATE", syncEvents[0].operation)
+        assertEquals("/data/user/0/app/files/pending_birth_photos/birth_1.jpg", syncEvents[0].local_photo_path)
+        assertTrue(syncEvents[0].payload_json.contains("\"id\":\"${success.birthEventId}\""))
+        assertTrue(syncEvents[0].payload_json.contains("\"liveBornCount\":2"))
+        assertTrue(syncEvents[0].payload_json.contains("\"stillbornCount\":1"))
+        assertTrue(syncEvents[0].payload_json.contains("\"lambs\":["))
+        assertTrue(syncEvents[0].payload_json.contains("\"breed\":\"Pelifolk\""))
+        assertTrue(syncEvents[0].payload_json.contains("\"weightId\":"))
+
+        val updatedDam = database.oviAppDatabaseQueries.selectAnimalById(damId).executeAsOne()
+        assertEquals(ReproductiveStatus.LACTATING.name, updatedDam.reproductive_status)
+    }
+
+    @Test
+    fun testDuplicateFolioInRanchRejectedWithoutPartialWrites() = runTest {
+        val ranchId = "ranch-dup-birth"
+        val damId = insertAdult(ranchId, "MADRE-20", Sex.FEMALE)
+        insertAdult(ranchId, "FOLIO-EXISTENTE", Sex.FEMALE)
+
+        val draft = BirthEventDraft(
+            ranchId = ranchId,
+            damId = damId,
+            birthDateIso = "2026-11-20",
+            liveOffspring = listOf(
+                LiveOffspringDraft("CRIA-NUEVA", Sex.FEMALE, "Blanco", "3.1"),
+                LiveOffspringDraft("FOLIO-EXISTENTE", Sex.MALE, "Negro", "3.5")
+            ),
+            localPhotoPath = "/tmp/birth.jpg"
+        )
+
+        val result = repository.saveBirthEventOffline(draft, "2026-11-22")
+        assertIs<BirthSaveResult.DuplicateFolio>(result)
+        assertTrue(database.oviAppDatabaseQueries.selectBirthEventsByDam(damId).executeAsList().isEmpty())
+        assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
+        assertEquals(
+            null,
+            database.oviAppDatabaseQueries.selectAnimalByFolio(ranchId, "CRIA-NUEVA").executeAsOneOrNull()
+        )
+        assertTrue(database.oviAppDatabaseQueries.selectOffspringByParent(damId).executeAsList().isEmpty())
+    }
+
+    @Test
+    fun testBirthDateWindowAndWeightValidationAndMissingPhotoFile() = runTest {
+        val ranchId = "ranch-val"
+        val damId = insertAdult(ranchId, "MADRE-VAL", Sex.FEMALE)
+
+        // Day 30 inclusive is valid ("2026-10-23" when today is "2026-11-22")
+        val day30Draft = BirthEventDraft(
+            ranchId = ranchId,
+            damId = damId,
+            sireId = "   ", // whitespace normalized to null
+            birthDateIso = "2026-10-23",
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-30", Sex.FEMALE, "Blanco", "3.0")),
+            localPhotoPath = "/tmp/valid.jpg"
+        )
+        val day30Res = repository.saveBirthEventOffline(day30Draft, "2026-11-22")
+        assertIs<BirthSaveResult.Success>(day30Res)
+        assertEquals(
+            null,
+            database.oviAppDatabaseQueries.selectBirthEventById(day30Res.birthEventId).executeAsOne().sire_id
+        )
+
+        // Day 31 rejected
+        val day31Draft = day30Draft.copy(
+            birthDateIso = "2026-10-22",
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-31", Sex.FEMALE, "Blanco", "3.0"))
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(day31Draft, "2026-11-22"))
+
+        // Non-finite weight rejected
+        val nanWeight = day30Draft.copy(
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-NAN", Sex.FEMALE, "Blanco", "NaN"))
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(nanWeight, "2026-11-22"))
+
+        // Missing/unreadable photo file rejected before writes
+        val strictRepo = SqlDelightBirthEventRepository(
+            database = database,
+            photoExistsCheck = { false }
+        )
+        val missingFileRes = strictRepo.saveBirthEventOffline(
+            day30Draft.copy(liveOffspring = listOf(LiveOffspringDraft("CRIA-MISS", Sex.FEMALE, "Blanco", "3.0"))),
+            "2026-11-22"
+        )
+        assertIs<BirthSaveResult.ValidationError>(missingFileRes)
+    }
+
+    @Test
+    fun testGetSavedBirthEventsReturnsReadOnlySummariesWithParentFolios() = runTest {
+        val damId = insertAdult("ranch-1", "H-200", Sex.FEMALE)
+        val sireId = insertAdult("ranch-1", "M-200", Sex.MALE)
+
+        val saveRes = repository.saveBirthEventOffline(
+            BirthEventDraft(
+                ranchId = "ranch-1",
+                damId = damId,
+                sireId = sireId,
+                conceptionMethod = ConceptionMethod.MN,
+                birthDateIso = "2026-11-20",
+                stillborns = 1,
+                liveOffspring = listOf(
+                    LiveOffspringDraft("CRIA-200", Sex.FEMALE, "Canelo", "3.4")
+                ),
+                localPhotoPath = "/tmp/birth_200.jpg",
+                notes = "Parto normal"
+            ),
+            todayDateIso = "2026-11-22"
+        )
+        assertIs<BirthSaveResult.Success>(saveRes)
+
+        val saved = repository.getSavedBirthEvents("ranch-1")
+        assertEquals(1, saved.size)
+        val item = saved.first()
+        assertEquals("H-200", item.damFolio)
+        assertEquals("M-200", item.sireFolio)
+        assertEquals(1, item.liveBirths)
+        assertEquals(1, item.stillborns)
+        assertEquals("TWIN", item.parturitionType)
+        assertTrue(item.hasPhoto)
+        assertEquals("Parto normal", item.notes)
+    }
+
+    @Test
+    fun testSaveBirthEventIsIdempotentByDraftKeyAcrossRepeatedCalls() = runTest {
+        val damId = insertAdult("ranch-1", "H-300", Sex.FEMALE)
+        val firstDraft = BirthEventDraft(
+            ranchId = "ranch-1",
+            damId = damId,
+            birthDateIso = "2026-11-22",
+            stillborns = 0,
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-300", Sex.FEMALE, "Blanco", "3.2")),
+            localPhotoPath = "/tmp/birth_300.jpg"
+        )
+
+        val firstRes = repository.saveBirthEventOffline(firstDraft, "2026-11-22", draftKey = "draft-key-1")
+        assertIs<BirthSaveResult.Success>(firstRes)
+
+        // Repeating the same draftKey (even with a different folio) must be rejected atomically
+        val repeatRes = repository.saveBirthEventOffline(
+            firstDraft.copy(liveOffspring = listOf(LiveOffspringDraft("CRIA-300-DUP", Sex.FEMALE, "Blanco", "3.2"))),
+            "2026-11-22",
+            draftKey = "draft-key-1"
+        )
+        assertIs<BirthSaveResult.ValidationError>(repeatRes)
+        assertEquals(null, database.oviAppDatabaseQueries.selectAnimalByFolio("ranch-1", "CRIA-300-DUP").executeAsOneOrNull())
+
+        // A different draftKey saves normally
+        val secondRes = repository.saveBirthEventOffline(
+            firstDraft.copy(liveOffspring = listOf(LiveOffspringDraft("CRIA-301", Sex.MALE, "Negro", "3.5"))),
+            "2026-11-22",
+            draftKey = "draft-key-2"
+        )
+        assertIs<BirthSaveResult.Success>(secondRes)
+    }
+
+    @Test
+    fun testInactiveDamPreDamBirthDateAndDecimalWeightsValidated() = runTest {
+        val ranchId = "ranch-rules"
+        val deceasedDamId = insertAdult(ranchId, "H-DEAD", Sex.FEMALE, status = AnimalStatus.DECEASED)
+        val activeDamId = insertAdult(ranchId, "H-YOUNG", Sex.FEMALE, birthDate = "2026-11-15")
+
+        val deadDamDraft = BirthEventDraft(
+            ranchId = ranchId,
+            damId = deceasedDamId,
+            birthDateIso = "2026-11-20",
+            liveOffspring = listOf(LiveOffspringDraft("C-1", Sex.FEMALE, "Blanco", "3.2")),
+            localPhotoPath = "/tmp/p.jpg"
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(deadDamDraft, "2026-11-22"))
+
+        val beforeDamBorn = deadDamDraft.copy(damId = activeDamId, birthDateIso = "2026-11-10")
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(beforeDamBorn, "2026-11-22"))
+
+        // > 2 decimal places rejected
+        val tooManyDecimals = deadDamDraft.copy(
+            damId = activeDamId,
+            liveOffspring = listOf(LiveOffspringDraft("C-2", Sex.FEMALE, "Blanco", "3.456"))
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(tooManyDecimals, "2026-11-22"))
+
+        // Comma decimal separator accepted and converted cleanly
+        val commaWeight = deadDamDraft.copy(
+            damId = activeDamId,
+            liveOffspring = listOf(LiveOffspringDraft("C-3", Sex.FEMALE, "Blanco", "3,45"))
+        )
+        val ok = assertIs<BirthSaveResult.Success>(repository.saveBirthEventOffline(commaWeight, "2026-11-22"))
+        val savedWeight = database.oviAppDatabaseQueries.selectWeightsByAnimalPaged(ok.offspringIds[0], 5, 0).executeAsOne()
+        assertEquals(3.45, savedWeight.weight_kg)
+    }
+
+    private fun insertAdult(
+        ranchId: String,
+        folio: String,
+        sex: Sex,
+        status: AnimalStatus = AnimalStatus.ACTIVE,
+        birthDate: String = "2023-01-01"
+    ): String {
+        val id = UuidV7.generate()
+        database.oviAppDatabaseQueries.insertAnimal(
+            id = id,
+            ranch_id = ranchId,
+            folio_interno = folio,
+            siniiga_chip = null,
+            registro_uno = null,
+            adn = null,
+            breed = "Pelifolk",
+            color = "Blanco",
+            sex = sex.name,
+            birth_date = birthDate,
+            weaning_date = null,
+            parturition_type = ParturitionType.SIMPLE.name,
+            conception_method = ConceptionMethod.MN.name,
+            sire_id = null,
+            dam_id = null,
+            external_sire_folio = null,
+            external_dam_folio = null,
+            entry_reason = EntryReason.BIRTH.name,
+            criador_name = null,
+            photo_s3_key = null,
+            birth_event_id = null,
+            mortality_date = null,
+            mortality_cause = null,
+            life_stage = LifeStage.ADULT.name,
+            reproductive_status = ReproductiveStatus.EMPTY.name,
+            status = status.name,
+            updated_at = "2026-11-22T00:00:00Z"
+        )
+        return id
+    }
+}
