@@ -176,7 +176,9 @@ fun InventoryScreen(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            loadError = e.message ?: "No se pudo cargar el inventario."
+            if (activeRequestGeneration == requestGeneration) {
+                loadError = e.message ?: "No se pudo cargar el inventario."
+            }
         } finally {
             if (activeRequestGeneration == requestGeneration) {
                 isLoading = false
@@ -246,7 +248,9 @@ fun InventoryScreen(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    loadError = e.message ?: "Error al cargar más registros."
+                    if (activeRequestGeneration == requestGeneration) {
+                        loadError = e.message ?: "Error al cargar más registros."
+                    }
                 } finally {
                     if (activeRequestGeneration == requestGeneration) {
                         isLoading = false
