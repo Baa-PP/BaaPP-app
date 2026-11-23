@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.animals.domain.repository
 
+import com.agrotech.oviapp.animals.domain.model.AnimalDetailWithGenealogy
 import com.agrotech.oviapp.animals.domain.model.EweInventoryItem
 import com.agrotech.oviapp.animals.domain.model.LambInventoryItem
 import com.agrotech.oviapp.animals.domain.model.RamInventoryItem
@@ -29,4 +30,6 @@ interface AnimalInventoryRepository {
         limit: Long = 50,
         offset: Long = 0
     ): List<LambInventoryItem>
+
+    suspend fun getAnimalGenealogy(animalId: String): AnimalDetailWithGenealogy?
 }

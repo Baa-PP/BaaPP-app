@@ -102,6 +102,7 @@ fun InventoryScreen(
     ranchId: String,
     inventoryRepository: AnimalInventoryRepository,
     onBackClick: () -> Unit,
+    onAnimalClick: (String) -> Unit = {},
     onEditAnimalClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -419,6 +420,7 @@ fun InventoryScreen(
                                 items(ewesList, key = { it.id }) { ewe ->
                                     EweCard(
                                         ewe = ewe,
+                                        onCardClick = { onAnimalClick(ewe.id) },
                                         onEditClick = onEditAnimalClick?.let { handler -> { handler(ewe.id) } }
                                     )
                                 }
@@ -431,6 +433,7 @@ fun InventoryScreen(
                                 items(ramsList, key = { it.id }) { ram ->
                                     RamCard(
                                         ram = ram,
+                                        onCardClick = { onAnimalClick(ram.id) },
                                         onEditClick = onEditAnimalClick?.let { handler -> { handler(ram.id) } }
                                     )
                                 }
@@ -443,6 +446,7 @@ fun InventoryScreen(
                                 items(lambsList, key = { it.id }) { lamb ->
                                     LambCard(
                                         lamb = lamb,
+                                        onCardClick = { onAnimalClick(lamb.id) },
                                         onEditClick = onEditAnimalClick?.let { handler -> { handler(lamb.id) } }
                                     )
                                 }
@@ -508,8 +512,9 @@ fun InventoryScreen(
 }
 
 @Composable
-private fun EweCard(ewe: EweInventoryItem, onEditClick: (() -> Unit)?) {
+private fun EweCard(ewe: EweInventoryItem, onCardClick: () -> Unit, onEditClick: (() -> Unit)?) {
     Card(
+        onClick = onCardClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -587,8 +592,9 @@ private fun EweCard(ewe: EweInventoryItem, onEditClick: (() -> Unit)?) {
 }
 
 @Composable
-private fun RamCard(ram: RamInventoryItem, onEditClick: (() -> Unit)?) {
+private fun RamCard(ram: RamInventoryItem, onCardClick: () -> Unit, onEditClick: (() -> Unit)?) {
     Card(
+        onClick = onCardClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -676,7 +682,7 @@ private fun RamCard(ram: RamInventoryItem, onEditClick: (() -> Unit)?) {
 }
 
 @Composable
-private fun LambCard(lamb: LambInventoryItem, onEditClick: (() -> Unit)?) {
+private fun LambCard(lamb: LambInventoryItem, onCardClick: () -> Unit, onEditClick: (() -> Unit)?) {
     val isMale = lamb.sex == Sex.MALE
     val sexLabel = if (isMale) "♂ Macho" else "♀ Hembra"
     val sexColor = if (isMale) BaappMaleBlue else BaappFemalePink
@@ -690,6 +696,7 @@ private fun LambCard(lamb: LambInventoryItem, onEditClick: (() -> Unit)?) {
     }
 
     Card(
+        onClick = onCardClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),

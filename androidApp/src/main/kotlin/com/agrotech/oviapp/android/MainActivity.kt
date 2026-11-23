@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.agrotech.oviapp.android.ui.AnimalDetailScreen
 import com.agrotech.oviapp.android.ui.AnimalFormScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.InventoryScreen
@@ -297,6 +298,7 @@ private fun MainApp(
 private sealed interface AppScreen {
     data object Home : AppScreen
     data object Inventory : AppScreen
+    data class AnimalDetail(val animalId: String) : AppScreen
     data class AnimalForm(val animalId: String? = null) : AppScreen
 }
 
@@ -305,16 +307,26 @@ private val AppScreenSaver = listSaver<AppScreen, String>(
         when (screen) {
             is AppScreen.Home -> listOf("Home")
             is AppScreen.Inventory -> listOf("Inventory")
+            is AppScreen.AnimalDetail -> listOf("AnimalDetail", screen.animalId)
             is AppScreen.AnimalForm -> listOf("AnimalForm", screen.animalId ?: "")
         }
     },
     restore = { saved ->
         when (saved.firstOrNull()) {
             "Inventory" -> AppScreen.Inventory
+            "AnimalDetail" -> {
+                val id = saved.getOrNull(1)
+                if (!id.isNullOrBlank()) AppScreen.AnimalDetail(id) else AppScreen.Inventory
+            }
             "AnimalForm" -> AppScreen.AnimalForm(saved.getOrNull(1)?.takeIf { it.isNotEmpty() })
             else -> AppScreen.Home
         }
     }
+)
+
+private val StringListSaver = listSaver<List<String>, String>(
+    save = { it },
+    restore = { it }
 )
 
 @Composable
@@ -328,6 +340,10 @@ fun AppNavigation(
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
     }
+    var detailBackStack by rememberSaveable(stateSaver = StringListSaver) {
+        mutableStateOf(emptyList())
+    }
+    var returnToDetailId by rememberSaveable { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -342,8 +358,13 @@ fun AppNavigation(
                         ranchId = currentRanchId,
                         inventoryRepository = inventoryRepository,
                         onBackClick = { currentScreen = AppScreen.Home },
+                        onAnimalClick = { animalId ->
+                            detailBackStack = emptyList()
+                            currentScreen = AppScreen.AnimalDetail(animalId)
+                        },
                         onEditAnimalClick = if (capabilities.canEditGeneralRecords) {
                             { animalId ->
+                                returnToDetailId = null
                                 currentScreen = AppScreen.AnimalForm(animalId = animalId)
                             }
                         } else {
@@ -351,6 +372,40 @@ fun AppNavigation(
                         }
                     )
                 } else {
+                    currentScreen = AppScreen.Home
+                }
+            }
+            is AppScreen.AnimalDetail -> {
+                if (!currentRanchId.isNullOrBlank() && capabilities.canReadInventory) {
+                    AnimalDetailScreen(
+                        animalId = screen.animalId,
+                        inventoryRepository = inventoryRepository,
+                        onBackClick = {
+                            if (detailBackStack.isNotEmpty()) {
+                                val previousId = detailBackStack.last()
+                                detailBackStack = detailBackStack.dropLast(1)
+                                currentScreen = AppScreen.AnimalDetail(previousId)
+                            } else {
+                                currentScreen = AppScreen.Inventory
+                            }
+                        },
+                        onNavigateToAnimal = { targetAnimalId ->
+                            if (targetAnimalId != screen.animalId) {
+                                detailBackStack = detailBackStack + screen.animalId
+                                currentScreen = AppScreen.AnimalDetail(targetAnimalId)
+                            }
+                        },
+                        onEditAnimalClick = if (capabilities.canEditGeneralRecords) {
+                            { animalId ->
+                                returnToDetailId = animalId
+                                currentScreen = AppScreen.AnimalForm(animalId = animalId)
+                            }
+                        } else {
+                            null
+                        }
+                    )
+                } else {
+                    detailBackStack = emptyList()
                     currentScreen = AppScreen.Home
                 }
             }
@@ -366,14 +421,17 @@ fun AppNavigation(
                         animalIdToEdit = screen.animalId,
                         commandRepository = commandRepository,
                         onNavigateBack = {
-                            currentScreen = if (screen.animalId != null) {
-                                AppScreen.Inventory
-                            } else {
-                                AppScreen.Home
+                            val detailTarget = returnToDetailId
+                            returnToDetailId = null
+                            currentScreen = when {
+                                detailTarget != null -> AppScreen.AnimalDetail(detailTarget)
+                                screen.animalId != null -> AppScreen.Inventory
+                                else -> AppScreen.Home
                             }
                         }
                     )
                 } else {
+                    returnToDetailId = null
                     currentScreen = if (screen.animalId != null) AppScreen.Inventory else AppScreen.Home
                 }
             }
@@ -383,6 +441,8 @@ fun AppNavigation(
                     onLogoutClick = {
                         authRepository.logout()
                         session = null
+                        detailBackStack = emptyList()
+                        returnToDetailId = null
                         currentScreen = AppScreen.Home
                         errorMessage = null
                     },
