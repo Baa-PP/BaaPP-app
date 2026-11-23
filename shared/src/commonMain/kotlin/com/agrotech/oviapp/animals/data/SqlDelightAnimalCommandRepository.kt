@@ -220,7 +220,15 @@ class SqlDelightAnimalCommandRepository(
         database.oviAppDatabaseQueries
             .selectLatestLocalPhotoByAnimalId(animalId)
             .executeAsOneOrNull()
+            ?.local_photo_path
     }
+
+    override suspend fun isLocalPhotoReferencedByPendingSync(localPhotoPath: String): Boolean =
+        withContext(ioDispatcher) {
+            database.oviAppDatabaseQueries
+                .countPendingSyncEventsByPhotoPath(localPhotoPath)
+                .executeAsOne() > 0L
+        }
 
     override suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> =
         getPotentialParentsBySex(ranchId, Sex.FEMALE)

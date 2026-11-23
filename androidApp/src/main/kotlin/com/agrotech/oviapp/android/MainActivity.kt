@@ -230,28 +230,27 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext null
                 }
 
-                val database = synchronized(lifecycleLock) {
-                    cachedDatabase ?: OviAppDatabase(driver).also { cachedDatabase = it }
-                }
-                val inventoryRepo = synchronized(lifecycleLock) {
-                    cachedInventoryRepository
-                        ?: SqlDelightAnimalInventoryRepository(database).also {
+                val (database, inventoryRepo, commandRepo) = synchronized(lifecycleLock) {
+                    if (isCleared) return@withContext null
+                    val db = cachedDatabase ?: OviAppDatabase(driver).also { cachedDatabase = it }
+                    val inv = cachedInventoryRepository
+                        ?: SqlDelightAnimalInventoryRepository(db).also {
                             cachedInventoryRepository = it
                         }
-                }
-                val commandRepo = synchronized(lifecycleLock) {
-                    cachedCommandRepository
+                    val cmd = cachedCommandRepository
                         ?: SqlDelightAnimalCommandRepository(
-                            database = database,
+                            database = db,
                             sessionStorage = sessionStorage
                         ).also {
                             cachedCommandRepository = it
                         }
+                    Triple(db, inv, cmd)
                 }
 
                 val cachedSession = authRepo.getCachedSession()
                 AppDependencies(authRepo, inventoryRepo, commandRepo) to cachedSession
             } ?: return
+            if (synchronized(lifecycleLock) { isCleared }) return
             currentSession = dependencies.second
             state = InitialState.Ready(dependencies.first)
         } catch (e: CancellationException) {

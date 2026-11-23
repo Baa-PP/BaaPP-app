@@ -150,6 +150,20 @@ class SqlDelightAnimalInventoryGenealogyTest {
         val detail = repository.getAnimalGenealogy(animalId)
         assertNotNull(detail)
         assertEquals("/data/user/0/app/files/pending_animal_photos/latest.jpg", detail.localPhotoPath)
+
+        // A newer event with local_photo_path = null supersedes the older attachment
+        database.oviAppDatabaseQueries.insertPendingSyncEvent(
+            mutation_id = UuidV7.generate(),
+            entity_type = "ANIMAL",
+            operation = "UPDATE",
+            occurred_at = "2026-11-22T14:00:00Z",
+            payload_json = """{"id":"$animalId","folioInterno":"FOTO-01"}""",
+            local_photo_path = null,
+            sync_status = "PENDING"
+        )
+        val removedDetail = repository.getAnimalGenealogy(animalId)
+        assertNotNull(removedDetail)
+        assertNull(removedDetail.localPhotoPath)
     }
 
     @Test

@@ -175,6 +175,7 @@ class SqlDelightAnimalInventoryRepository(
         val localPhotoPath = database.oviAppDatabaseQueries
             .selectLatestLocalPhotoByAnimalId(animal.id)
             .executeAsOneOrNull()
+            ?.local_photo_path
 
         AnimalDetailWithGenealogy(
             animal = animal,

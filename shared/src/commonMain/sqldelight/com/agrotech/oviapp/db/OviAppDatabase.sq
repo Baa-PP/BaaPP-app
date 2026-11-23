@@ -104,10 +104,13 @@ ORDER BY occurred_at ASC;
 selectLatestLocalPhotoByAnimalId:
 SELECT local_photo_path FROM pending_sync_events
 WHERE entity_type = 'ANIMAL'
-  AND local_photo_path IS NOT NULL
   AND payload_json LIKE ('%"id":"' || :animalId || '"%')
 ORDER BY occurred_at DESC
 LIMIT 1;
+
+countPendingSyncEventsByPhotoPath:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status = 'PENDING' AND local_photo_path = :localPhotoPath;
 
 markSyncEventCompleted:
 UPDATE pending_sync_events

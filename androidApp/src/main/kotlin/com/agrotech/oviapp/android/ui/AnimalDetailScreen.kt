@@ -100,6 +100,66 @@ fun AnimalDetailScreen(
     var errorMessage by remember(animalId) { mutableStateOf<String?>(null) }
     var retryTrigger by remember { mutableIntStateOf(0) }
 
+    val loadedAnimalId = detail?.animal?.id
+    val loadedLocalPhotoPath = detail?.localPhotoPath
+    val loadedPhotoS3Key = detail?.animal?.photoS3Key
+
+    var photoBitmap by remember(loadedAnimalId, loadedPhotoS3Key) { mutableStateOf<ImageBitmap?>(null) }
+    var isLoadingPhoto by remember(loadedAnimalId, loadedPhotoS3Key) { mutableStateOf(false) }
+    var photoStatusMessage by remember(loadedAnimalId, loadedPhotoS3Key) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(loadedAnimalId, loadedLocalPhotoPath, loadedPhotoS3Key) {
+        if (loadedAnimalId == null) return@LaunchedEffect
+        photoBitmap = null
+        photoStatusMessage = null
+        val localFile = loadedLocalPhotoPath?.let { File(it) }
+        val hasPresignedUrl = !loadedPhotoS3Key.isNullOrBlank() &&
+            (loadedPhotoS3Key.startsWith("https://", ignoreCase = true) ||
+                loadedPhotoS3Key.startsWith("http://", ignoreCase = true))
+
+        if (localFile != null && localFile.exists()) {
+            isLoadingPhoto = true
+            try {
+                val decoded = withContext(Dispatchers.IO) {
+                    decodeSampledBitmapFromBytes(localFile.readBytes())
+                }
+                if (decoded != null) {
+                    photoBitmap = decoded.asImageBitmap()
+                } else {
+                    photoStatusMessage = "No se pudo decodificar la fotografía local."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                photoStatusMessage = "Error al leer fotografía local."
+            } finally {
+                isLoadingPhoto = false
+            }
+        } else if (hasPresignedUrl) {
+            isLoadingPhoto = true
+            try {
+                val decoded = withContext(Dispatchers.IO) {
+                    loadBoundedBitmapFromUrl(loadedPhotoS3Key!!, MAX_REMOTE_PHOTO_BYTES)
+                }
+                if (decoded != null) {
+                    photoBitmap = decoded.asImageBitmap()
+                } else {
+                    photoStatusMessage = "No se pudo cargar la fotografía remota."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                photoStatusMessage = "Fotografía en S3 no disponible sin conexión."
+            } finally {
+                isLoadingPhoto = false
+            }
+        } else if (!loadedPhotoS3Key.isNullOrBlank()) {
+            photoStatusMessage = "Fotografía sincronizada ($loadedPhotoS3Key) · Pendiente de URL pre-firmada."
+        } else {
+            photoStatusMessage = "Sin fotografía registrada."
+        }
+    }
+
     LaunchedEffect(animalId, retryTrigger) {
         isLoading = true
         errorMessage = null
@@ -207,8 +267,9 @@ fun AnimalDetailScreen(
                         item(key = "photo") {
                             AnimalPhotoCard(
                                 folioInterno = animal.folioInterno,
-                                localPhotoPath = data.localPhotoPath,
-                                photoS3Key = animal.photoS3Key
+                                bitmap = photoBitmap,
+                                isLoadingPhoto = isLoadingPhoto,
+                                photoStatusMessage = photoStatusMessage
                             )
                         }
 
@@ -409,62 +470,10 @@ private fun AnimalSummaryCard(animal: Animal) {
 @Composable
 private fun AnimalPhotoCard(
     folioInterno: String,
-    localPhotoPath: String?,
-    photoS3Key: String?
+    bitmap: ImageBitmap?,
+    isLoadingPhoto: Boolean,
+    photoStatusMessage: String?
 ) {
-    var bitmap by remember(localPhotoPath, photoS3Key) { mutableStateOf<ImageBitmap?>(null) }
-    var isLoadingPhoto by remember(localPhotoPath, photoS3Key) { mutableStateOf(false) }
-    var photoStatusMessage by remember(localPhotoPath, photoS3Key) { mutableStateOf<String?>(null) }
-
-    val hasPresignedUrl = !photoS3Key.isNullOrBlank() &&
-        (photoS3Key.startsWith("https://", ignoreCase = true) || photoS3Key.startsWith("http://", ignoreCase = true))
-
-    LaunchedEffect(localPhotoPath, photoS3Key) {
-        bitmap = null
-        photoStatusMessage = null
-        val localFile = localPhotoPath?.let { File(it) }
-        if (localFile != null && localFile.exists()) {
-            isLoadingPhoto = true
-            try {
-                val decoded = withContext(Dispatchers.IO) {
-                    decodeSampledBitmapFromBytes(localFile.readBytes())
-                }
-                if (decoded != null) {
-                    bitmap = decoded.asImageBitmap()
-                } else {
-                    photoStatusMessage = "No se pudo decodificar la fotografía local."
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                photoStatusMessage = "Error al leer fotografía local."
-            } finally {
-                isLoadingPhoto = false
-            }
-        } else if (hasPresignedUrl) {
-            isLoadingPhoto = true
-            try {
-                val decoded = withContext(Dispatchers.IO) {
-                    loadBoundedBitmapFromUrl(photoS3Key!!, MAX_REMOTE_PHOTO_BYTES)
-                }
-                if (decoded != null) {
-                    bitmap = decoded.asImageBitmap()
-                } else {
-                    photoStatusMessage = "No se pudo cargar la fotografía remota."
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                photoStatusMessage = "Fotografía en S3 no disponible sin conexión."
-            } finally {
-                isLoadingPhoto = false
-            }
-        } else if (!photoS3Key.isNullOrBlank()) {
-            photoStatusMessage = "Fotografía sincronizada ($photoS3Key) · Pendiente de URL pre-firmada."
-        } else {
-            photoStatusMessage = "Sin fotografía registrada."
-        }
-    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),

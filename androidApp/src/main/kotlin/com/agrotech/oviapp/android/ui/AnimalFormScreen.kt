@@ -156,10 +156,17 @@ fun AnimalFormScreen(
         when (saveState) {
             is AnimalSaveUiState.Success -> {
                 if (saveState.draftKey == draftKey) {
+                    val previousCommitted = committedPhotoPath
                     committedPhotoPath = saveState.localPhotoPath
                     draftCreatedPhotos
                         .filter { it != saveState.localPhotoPath && it != committedPhotoPath }
                         .forEach { obsolete -> deletePendingPhotoIfOwned(context.filesDir, obsolete) }
+                    if (previousCommitted != null &&
+                        previousCommitted != saveState.localPhotoPath &&
+                        !commandRepository.isLocalPhotoReferencedByPendingSync(previousCommitted)
+                    ) {
+                        deletePendingPhotoIfOwned(context.filesDir, previousCommitted)
+                    }
                     draftCreatedPhotos = emptyList()
                     onResetSaveState()
                     onNavigateBack()
@@ -186,8 +193,10 @@ fun AnimalFormScreen(
         onNavigateBack()
     }
 
-    BackHandler(enabled = !isSaving) {
-        handleCancelAndCleanup()
+    BackHandler(enabled = true) {
+        if (!isSaving) {
+            handleCancelAndCleanup()
+        }
     }
 
     // Load parental dropdowns and existing animal if editing
@@ -796,7 +805,10 @@ fun AnimalFormScreen(
                         if (localPhotoPath != null || !photoS3Key.isNullOrBlank()) {
                             TextButton(
                                 onClick = {
-                                    deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                                    if (localPhotoPath != committedPhotoPath) {
+                                        deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                                    }
+                                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath }
                                     localPhotoPath = null
                                     photoSizeBytes = null
                                     photoS3Key = null
