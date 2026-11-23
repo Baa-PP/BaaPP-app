@@ -33,6 +33,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -44,6 +48,8 @@ import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.auth.domain.RanchPermission
 import com.agrotech.oviapp.auth.domain.UserRole
 import com.agrotech.oviapp.births.domain.model.BirthImmutabilityPolicy
+import com.agrotech.oviapp.summary.RanchSummary
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 private val BaappPrimaryGreen = Color(0xFF1B5E20)
@@ -62,6 +68,7 @@ fun HomeScreen(
     onOpenRegisterAnimalClick: () -> Unit = {},
     onOpenBirthEventClick: () -> Unit = {},
     onOpenSavedBirthsClick: () -> Unit = {},
+    loadSummary: (suspend (ranchId: String) -> RanchSummary)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -181,6 +188,14 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
+
+            // Resumen del rancho (APP-25): se recalcula cada vez que se vuelve a la pantalla principal.
+            if (loadSummary != null) {
+                var summaryState by remember(session) { mutableStateOf<RanchSummaryUi>(RanchSummaryUi.Loading) }
+                LaunchedEffect(session) { summaryState = loadRanchSummary(session, loadSummary) }
+                RanchSummarySection(summaryState)
+                Spacer(modifier = Modifier.height(20.dp))
+            }
 
             Text(
                 text = "Módulos de Corral (MVP 2026)",
