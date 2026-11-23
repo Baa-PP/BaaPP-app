@@ -7,9 +7,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** APP-19: "No existe ninguna acción de borrado físico de animales" verificado sobre el código. */
+/** APP-19 & APP-13: sin borrado físico de animales ni mutación/borrado local de nacimientos guardados. */
 class NoPhysicalDeleteTest {
     private val deleteAnimals = Regex("""DELETE\s+FROM\s+local_animals\b""", RegexOption.IGNORE_CASE)
+    private val mutateBirthEvents = Regex(
+        """(?:UPDATE\s+local_birth_events|DELETE\s+FROM\s+local_birth_events)\b""",
+        RegexOption.IGNORE_CASE
+    )
 
     @Test
     fun noQueryOrCodeDeletesAnimalRows() {
@@ -20,6 +24,17 @@ class NoPhysicalDeleteTest {
         assertTrue(files.any { it.extension == "sq" }, "no se encontraron los archivos .sq; revisa el directorio de trabajo")
 
         val offenders = files.filter { deleteAnimals.containsMatchIn(it.readText()) }.map { it.path }
+        assertEquals(emptyList(), offenders)
+    }
+
+    @Test
+    fun noQueryOrCodeUpdatesOrDeletesSavedBirthEvents() {
+        val roots = listOf(File("src"), File("../androidApp/src"))
+        val files = roots.flatMap { root -> root.walkTopDown().filter { it.isFile && it.extension in setOf("sq", "sqm", "kt") } }
+            .filterNot { it.name == "NoPhysicalDeleteTest.kt" }
+        assertTrue(files.any { it.extension == "sq" }, "no se encontraron los archivos .sq; revisa el directorio de trabajo")
+
+        val offenders = files.filter { mutateBirthEvents.containsMatchIn(it.readText()) }.map { it.path }
         assertEquals(emptyList(), offenders)
     }
 

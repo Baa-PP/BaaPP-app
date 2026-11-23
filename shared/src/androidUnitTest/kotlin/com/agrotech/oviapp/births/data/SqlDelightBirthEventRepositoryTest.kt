@@ -14,6 +14,7 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
 import kotlinx.coroutines.test.runTest
+import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,18 +23,24 @@ import kotlin.test.assertTrue
 
 class SqlDelightBirthEventRepositoryTest {
 
+    private lateinit var driver: JdbcSqliteDriver
     private lateinit var database: OviAppDatabase
     private lateinit var repository: SqlDelightBirthEventRepository
 
     @BeforeTest
     fun setup() {
-        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
         repository = SqlDelightBirthEventRepository(
             database = database,
             photoExistsCheck = { true }
         )
+    }
+
+    @AfterTest
+    fun tearDown() {
+        driver.close()
     }
 
     @Test
@@ -110,6 +117,15 @@ class SqlDelightBirthEventRepositoryTest {
         assertEquals("BIRTH_EVENT", syncEvents[0].entity_type)
         assertEquals("CREATE", syncEvents[0].operation)
         assertEquals("/data/user/0/app/files/pending_birth_photos/birth_1.jpg", syncEvents[0].local_photo_path)
+        assertTrue(syncEvents[0].payload_json.contains("\"id\":\"${success.birthEventId}\""))
+        assertTrue(syncEvents[0].payload_json.contains("\"liveBornCount\":2"))
+        assertTrue(syncEvents[0].payload_json.contains("\"stillbornCount\":1"))
+        assertTrue(syncEvents[0].payload_json.contains("\"lambs\":["))
+        assertTrue(syncEvents[0].payload_json.contains("\"breed\":\"Pelifolk\""))
+        assertTrue(syncEvents[0].payload_json.contains("\"weightId\":"))
+
+        val updatedDam = database.oviAppDatabaseQueries.selectAnimalById(damId).executeAsOne()
+        assertEquals(ReproductiveStatus.LACTATING.name, updatedDam.reproductive_status)
     }
 
     @Test
@@ -254,7 +270,48 @@ class SqlDelightBirthEventRepositoryTest {
         assertIs<BirthSaveResult.Success>(secondRes)
     }
 
-    private fun insertAdult(ranchId: String, folio: String, sex: Sex): String {
+    @Test
+    fun testInactiveDamPreDamBirthDateAndDecimalWeightsValidated() = runTest {
+        val ranchId = "ranch-rules"
+        val deceasedDamId = insertAdult(ranchId, "H-DEAD", Sex.FEMALE, status = AnimalStatus.DECEASED)
+        val activeDamId = insertAdult(ranchId, "H-YOUNG", Sex.FEMALE, birthDate = "2026-11-15")
+
+        val deadDamDraft = BirthEventDraft(
+            ranchId = ranchId,
+            damId = deceasedDamId,
+            birthDateIso = "2026-11-20",
+            liveOffspring = listOf(LiveOffspringDraft("C-1", Sex.FEMALE, "Blanco", "3.2")),
+            localPhotoPath = "/tmp/p.jpg"
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(deadDamDraft, "2026-11-22"))
+
+        val beforeDamBorn = deadDamDraft.copy(damId = activeDamId, birthDateIso = "2026-11-10")
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(beforeDamBorn, "2026-11-22"))
+
+        // > 2 decimal places rejected
+        val tooManyDecimals = deadDamDraft.copy(
+            damId = activeDamId,
+            liveOffspring = listOf(LiveOffspringDraft("C-2", Sex.FEMALE, "Blanco", "3.456"))
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(tooManyDecimals, "2026-11-22"))
+
+        // Comma decimal separator accepted and converted cleanly
+        val commaWeight = deadDamDraft.copy(
+            damId = activeDamId,
+            liveOffspring = listOf(LiveOffspringDraft("C-3", Sex.FEMALE, "Blanco", "3,45"))
+        )
+        val ok = assertIs<BirthSaveResult.Success>(repository.saveBirthEventOffline(commaWeight, "2026-11-22"))
+        val savedWeight = database.oviAppDatabaseQueries.selectWeightsByAnimalPaged(ok.offspringIds[0], 5, 0).executeAsOne()
+        assertEquals(3.45, savedWeight.weight_kg)
+    }
+
+    private fun insertAdult(
+        ranchId: String,
+        folio: String,
+        sex: Sex,
+        status: AnimalStatus = AnimalStatus.ACTIVE,
+        birthDate: String = "2023-01-01"
+    ): String {
         val id = UuidV7.generate()
         database.oviAppDatabaseQueries.insertAnimal(
             id = id,
@@ -266,7 +323,7 @@ class SqlDelightBirthEventRepositoryTest {
             breed = "Pelifolk",
             color = "Blanco",
             sex = sex.name,
-            birth_date = "2023-01-01",
+            birth_date = birthDate,
             weaning_date = null,
             parturition_type = ParturitionType.SIMPLE.name,
             conception_method = ConceptionMethod.MN.name,
@@ -282,7 +339,7 @@ class SqlDelightBirthEventRepositoryTest {
             mortality_cause = null,
             life_stage = LifeStage.ADULT.name,
             reproductive_status = ReproductiveStatus.EMPTY.name,
-            status = AnimalStatus.ACTIVE.name,
+            status = status.name,
             updated_at = "2026-11-22T00:00:00Z"
         )
         return id

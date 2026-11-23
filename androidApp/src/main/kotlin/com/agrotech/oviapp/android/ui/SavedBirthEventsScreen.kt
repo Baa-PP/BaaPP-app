@@ -38,17 +38,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.agrotech.oviapp.android.ui.theme.FieldPalette
 import com.agrotech.oviapp.auth.domain.UiAccessCapabilities
 import com.agrotech.oviapp.births.domain.model.BirthImmutabilityPolicy
 import com.agrotech.oviapp.births.domain.model.SavedBirthEvent
 import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
 import kotlinx.coroutines.CancellationException
 
-private val SavedBirthPrimaryGreen = Color(0xFF1B5E20)
-private val SavedBirthBackground = Color(0xFFF7F9F7)
+private val SavedBirthPrimaryGreen = Color(FieldPalette.PASTURE)
 private val SavedBirthSoftGreen = Color(0xFFE8F5E9)
 private val SavedBirthWarningBg = Color(0xFFFFF8E1)
-private val SavedBirthWarningText = Color(0xFF8D6E00)
+private val SavedBirthWarningText = Color(0xFF6D4C00)
 
 /**
  * Read-only view of saved birth events (APP-13 / RF-AND-04).
@@ -100,7 +100,7 @@ fun SavedBirthEventsScreen(
                 )
             )
         },
-        containerColor = SavedBirthBackground
+        containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -108,7 +108,7 @@ fun SavedBirthEventsScreen(
                 .padding(innerPadding)
                 .padding(16.dp)
         ) {
-            if (capabilities.showBirthImmutabilityNotice || !capabilities.canEditSavedBirths) {
+            if (capabilities.showBirthImmutabilityNotice) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -132,14 +132,14 @@ fun SavedBirthEventsScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator(color = SavedBirthPrimaryGreen)
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 errorMessage != null -> {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
@@ -147,12 +147,12 @@ fun SavedBirthEventsScreen(
                         ) {
                             Text(
                                 text = errorMessage ?: "",
-                                style = MaterialTheme.typography.bodyMedium.copy(color = Color(0xFFB71C1C))
+                                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.error)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = { retryCounter += 1 },
-                                colors = ButtonDefaults.buttonColors(containerColor = SavedBirthPrimaryGreen)
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
                                 Text("Reintentar")
                             }
@@ -163,11 +163,11 @@ fun SavedBirthEventsScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
                         Text(
                             text = "Aún no hay nacimientos guardados localmente en este rancho.",
-                            style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray),
+                            style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
                             modifier = Modifier.padding(16.dp)
                         )
                     }
@@ -192,7 +192,7 @@ private fun SavedBirthEventCard(birth: SavedBirthEvent) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -229,7 +229,7 @@ private fun SavedBirthEventCard(birth: SavedBirthEvent) {
             if (!birth.sireFolio.isNullOrBlank() || !birth.sireId.isNullOrBlank()) {
                 Text(
                     text = "Padre: ${birth.sireFolio ?: birth.sireId}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
             }
 
@@ -241,14 +241,14 @@ private fun SavedBirthEventCard(birth: SavedBirthEvent) {
             )
             Text(
                 text = "Concepción: ${birth.conceptionMethod} · Evidencia: ${if (birth.hasPhoto) "Foto adjunta" else "Sin foto"}",
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
             )
 
             if (!birth.notes.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Notas: ${birth.notes}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
             }
         }

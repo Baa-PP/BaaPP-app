@@ -47,10 +47,14 @@ class FakeSessionStorage : SessionStorage {
     override fun updateSessionIfMatches(
         expectedSessionId: String,
         expectedRefreshToken: String?,
+        expectedAccessToken: String?,
         transform: (AuthSession) -> AuthSession
     ): Boolean = lock.withLock {
         val current = currentSession ?: return@withLock false
-        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+        if (current.sessionId != expectedSessionId ||
+            current.refreshToken != expectedRefreshToken ||
+            (expectedAccessToken != null && current.accessToken != expectedAccessToken)
+        ) {
             return@withLock false
         }
         currentSession = transform(current)
@@ -59,10 +63,14 @@ class FakeSessionStorage : SessionStorage {
 
     override fun clearSessionIfMatches(
         expectedSessionId: String,
-        expectedRefreshToken: String?
+        expectedRefreshToken: String?,
+        expectedAccessToken: String?
     ): Boolean = lock.withLock {
         val current = currentSession ?: return@withLock false
-        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+        if (current.sessionId != expectedSessionId ||
+            current.refreshToken != expectedRefreshToken ||
+            (expectedAccessToken != null && current.accessToken != expectedAccessToken)
+        ) {
             return@withLock false
         }
         currentSession = null

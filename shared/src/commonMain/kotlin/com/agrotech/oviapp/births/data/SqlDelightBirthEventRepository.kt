@@ -4,7 +4,6 @@ import com.agrotech.oviapp.births.domain.model.BirthEventDraft
 import com.agrotech.oviapp.births.domain.model.BirthSaveResult
 import com.agrotech.oviapp.births.domain.model.SavedBirthEvent
 import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
-import com.agrotech.oviapp.births.media.isReadableLocalPhotoFile
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.AnimalStatus
 import com.agrotech.oviapp.domain.model.EntryReason
@@ -13,6 +12,12 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
 import com.agrotech.oviapp.domain.model.currentEpochMillis
+import com.agrotech.oviapp.photos.LocalPhotoFileOps
+import com.agrotech.oviapp.sync.IsoTimestamp
+import com.agrotech.oviapp.sync.PendingSyncQueue
+import com.agrotech.oviapp.sync.SyncEntityType
+import com.agrotech.oviapp.sync.SyncOperation
+import com.agrotech.oviapp.weights.Decimals
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -25,10 +30,11 @@ class SqlDelightBirthEventRepository(
     private val database: OviAppDatabase,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val clockMillis: () -> Long = ::currentEpochMillis,
-    private val photoExistsCheck: (String) -> Boolean = ::isReadableLocalPhotoFile
+    private val photoExistsCheck: (String) -> Boolean = LocalPhotoFileOps::exists
 ) : BirthEventRepository {
 
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val syncQueue = PendingSyncQueue(database = database, nowMillis = clockMillis)
 
     override suspend fun saveBirthEventOffline(
         draft: BirthEventDraft,
@@ -46,10 +52,14 @@ class SqlDelightBirthEventRepository(
                 "La fotografía seleccionada no existe o no se puede leer."
             )
         }
+        val persistedPhotoPath = if (LocalPhotoFileOps.exists(cleanPhotoPath)) {
+            LocalPhotoFileOps.canonicalize(cleanPhotoPath) ?: cleanPhotoPath
+        } else {
+            cleanPhotoPath
+        }
 
         val birthEventId = UuidV7.generate()
-        val mutationId = UuidV7.generate()
-        val occurredAt = formatEpochMillisToIsoUtc(clockMillis())
+        val occurredAt = IsoTimestamp.format(clockMillis())
         val parturitionType = draft.deducedParturitionType()
         val cleanBirthDate = draft.birthDateIso.trim()
         val normalizedSireId = draft.sireId?.trim()?.takeIf { it.isNotEmpty() }
@@ -57,8 +67,9 @@ class SqlDelightBirthEventRepository(
 
         try {
             database.transactionWithResult {
+                val queries = database.oviAppDatabaseQueries
                 if (normalizedDraftKey != null) {
-                    val existingByKey = database.oviAppDatabaseQueries
+                    val existingByKey = queries
                         .selectBirthEventByDraftKey(normalizedDraftKey)
                         .executeAsOneOrNull()
                     if (existingByKey != null) {
@@ -68,7 +79,7 @@ class SqlDelightBirthEventRepository(
                     }
                 }
 
-                val dam = database.oviAppDatabaseQueries
+                val dam = queries
                     .selectAnimalById(draft.damId)
                     .executeAsOneOrNull()
                 if (dam == null || dam.ranch_id != draft.ranchId || dam.sex != Sex.FEMALE.name) {
@@ -76,9 +87,19 @@ class SqlDelightBirthEventRepository(
                         "La madre seleccionada no es válida para este rancho."
                     )
                 }
+                if (dam.status != AnimalStatus.ACTIVE.name) {
+                    return@transactionWithResult BirthSaveResult.ValidationError(
+                        "La madre seleccionada no está activa en el rebaño."
+                    )
+                }
+                if (cleanBirthDate < dam.birth_date.take(10)) {
+                    return@transactionWithResult BirthSaveResult.ValidationError(
+                        "La fecha de parto no puede ser anterior al nacimiento de la madre."
+                    )
+                }
 
                 if (normalizedSireId != null) {
-                    val sire = database.oviAppDatabaseQueries
+                    val sire = queries
                         .selectAnimalById(normalizedSireId)
                         .executeAsOneOrNull()
                     if (sire == null || sire.ranch_id != draft.ranchId || sire.sex != Sex.MALE.name) {
@@ -91,7 +112,7 @@ class SqlDelightBirthEventRepository(
                 // Validate all offspring folios before inserting any rows so a conflict never partially commits
                 for (child in draft.liveOffspring) {
                     val cleanFolio = child.folioInterno.trim()
-                    val existing = database.oviAppDatabaseQueries
+                    val existing = queries
                         .selectAnimalByFolio(draft.ranchId, cleanFolio)
                         .executeAsOneOrNull()
                     if (existing != null) {
@@ -101,115 +122,138 @@ class SqlDelightBirthEventRepository(
                     }
                 }
 
-                val offspringPayloads = mutableListOf<SyncOffspringPayload>()
-                val createdIds = mutableListOf<String>()
+                data class PreparedLamb(
+                    val childId: String,
+                    val weightId: String,
+                    val folio: String,
+                    val color: String,
+                    val sex: Sex,
+                    val weightKg: Double,
+                )
 
-                for (child in draft.liveOffspring) {
-                    val cleanFolio = child.folioInterno.trim()
-                    val childId = UuidV7.generate()
-                    val weightId = UuidV7.generate()
-                    val weightKg = child.birthWeightKg.trim().toDouble()
-
-                    database.oviAppDatabaseQueries.insertAnimal(
-                        id = childId,
-                        ranch_id = draft.ranchId,
-                        folio_interno = cleanFolio,
-                        siniiga_chip = null,
-                        registro_uno = null,
-                        adn = null,
-                        breed = dam.breed,
-                        color = child.color.trim(),
-                        sex = child.sex.name,
-                        birth_date = cleanBirthDate,
-                        weaning_date = null,
-                        parturition_type = parturitionType.name,
-                        conception_method = draft.conceptionMethod.name,
-                        sire_id = normalizedSireId,
-                        dam_id = draft.damId,
-                        external_sire_folio = null,
-                        external_dam_folio = null,
-                        entry_reason = EntryReason.BIRTH.name,
-                        criador_name = null,
-                        photo_s3_key = null,
-                        birth_event_id = birthEventId,
-                        mortality_date = null,
-                        mortality_cause = null,
-                        life_stage = LifeStage.LAMB_LACTATING.name,
-                        reproductive_status = ReproductiveStatus.EMPTY.name,
-                        status = AnimalStatus.ACTIVE.name,
-                        updated_at = occurredAt
-                    )
-
-                    database.oviAppDatabaseQueries.insertWeightMeasurement(
-                        id = weightId,
-                        ranch_id = draft.ranchId,
-                        animal_id = childId,
-                        milestone = "BIRTH",
-                        weight_kg = weightKg,
-                        scrotal_circumference_cm = null,
-                        measurement_date = cleanBirthDate,
-                        notes = null,
-                        created_at = occurredAt,
-                        updated_at = occurredAt
-                    )
-
-                    createdIds.add(childId)
-                    offspringPayloads.add(
-                        SyncOffspringPayload(
-                            id = childId,
-                            folioInterno = cleanFolio,
-                            sex = child.sex.name,
-                            color = child.color.trim(),
-                            birthWeightKg = weightKg
+                val preparedLambs = draft.liveOffspring.map { child ->
+                    val parsed = Decimals.parseHundredths(child.birthWeightKg)
+                        ?: return@transactionWithResult BirthSaveResult.ValidationError(
+                            "El peso al nacer de '${child.folioInterno.trim()}' es inválido."
                         )
+                    PreparedLamb(
+                        childId = UuidV7.generate(),
+                        weightId = UuidV7.generate(),
+                        folio = child.folioInterno.trim(),
+                        color = child.color.trim(),
+                        sex = child.sex,
+                        weightKg = parsed.hundredths / 100.0,
                     )
                 }
 
-                database.oviAppDatabaseQueries.insertBirthEvent(
+                val syncPayload = SyncBirthCreatePayload(
                     id = birthEventId,
-                    ranch_id = draft.ranchId,
-                    dam_id = draft.damId,
-                    sire_id = normalizedSireId,
-                    birth_date = cleanBirthDate,
-                    live_births = draft.liveOffspring.size.toLong(),
-                    stillborns = draft.stillborns.toLong(),
-                    parturition_type = parturitionType.name,
-                    conception_method = draft.conceptionMethod.name,
-                    photo_s3_key = null,
-                    local_photo_path = cleanPhotoPath,
-                    registered_by_user_id = draft.registeredByUserId,
-                    notes = draft.notes?.trim()?.takeIf { it.isNotEmpty() },
-                    draft_key = normalizedDraftKey,
-                    created_at = occurredAt,
-                    updated_at = occurredAt
-                )
-
-                val syncPayload = SyncBirthEventPayload(
-                    birthEventId = birthEventId,
-                    ranchId = draft.ranchId,
                     damId = draft.damId,
                     sireId = normalizedSireId,
+                    externalSireFolio = null,
                     birthDate = cleanBirthDate,
-                    liveBirths = draft.liveOffspring.size,
-                    stillborns = draft.stillborns,
-                    parturitionType = parturitionType.name,
+                    liveBornCount = preparedLambs.size,
+                    stillbornCount = draft.stillborns,
                     conceptionMethod = draft.conceptionMethod.name,
-                    offspring = offspringPayloads
+                    evidencePhotoS3Key = null,
+                    lambs = preparedLambs.map { lamb ->
+                        SyncBirthLambPayload(
+                            id = lamb.childId,
+                            folioInterno = lamb.folio,
+                            breed = dam.breed,
+                            color = lamb.color,
+                            sex = lamb.sex.name,
+                            lifeStage = LifeStage.LAMB_LACTATING.name,
+                            reproductiveStatus = ReproductiveStatus.EMPTY.name,
+                            birthWeightKg = lamb.weightKg,
+                            weightId = lamb.weightId,
+                        )
+                    }
                 )
 
-                database.oviAppDatabaseQueries.insertSyncEvent(
-                    mutation_id = mutationId,
-                    entity_type = "BIRTH_EVENT",
-                    operation = "CREATE",
-                    occurred_at = occurredAt,
-                    payload_json = json.encodeToString(syncPayload),
-                    local_photo_path = cleanPhotoPath
-                )
+                val mutation = syncQueue.writeAndEnqueue(
+                    entityType = SyncEntityType.BIRTH_EVENT,
+                    operation = SyncOperation.CREATE,
+                    payloadJson = json.encodeToString(syncPayload),
+                    localPhotoPath = persistedPhotoPath,
+                ) {
+                    for (lamb in preparedLambs) {
+                        queries.insertAnimal(
+                            id = lamb.childId,
+                            ranch_id = draft.ranchId,
+                            folio_interno = lamb.folio,
+                            siniiga_chip = null,
+                            registro_uno = null,
+                            adn = null,
+                            breed = dam.breed,
+                            color = lamb.color,
+                            sex = lamb.sex.name,
+                            birth_date = cleanBirthDate,
+                            weaning_date = null,
+                            parturition_type = parturitionType.name,
+                            conception_method = draft.conceptionMethod.name,
+                            sire_id = normalizedSireId,
+                            dam_id = draft.damId,
+                            external_sire_folio = null,
+                            external_dam_folio = null,
+                            entry_reason = EntryReason.BIRTH.name,
+                            criador_name = null,
+                            photo_s3_key = null,
+                            birth_event_id = birthEventId,
+                            mortality_date = null,
+                            mortality_cause = null,
+                            life_stage = LifeStage.LAMB_LACTATING.name,
+                            reproductive_status = ReproductiveStatus.EMPTY.name,
+                            status = AnimalStatus.ACTIVE.name,
+                            updated_at = occurredAt
+                        )
+
+                        queries.insertWeightMeasurement(
+                            id = lamb.weightId,
+                            ranch_id = draft.ranchId,
+                            animal_id = lamb.childId,
+                            milestone = "BIRTH",
+                            weight_kg = lamb.weightKg,
+                            scrotal_circumference_cm = null,
+                            measurement_date = cleanBirthDate,
+                            notes = null,
+                            created_at = occurredAt,
+                            updated_at = occurredAt
+                        )
+                    }
+
+                    if (preparedLambs.isNotEmpty()) {
+                        queries.markMotherLactatingAfterBirth(
+                            updatedAt = occurredAt,
+                            id = draft.damId,
+                            ranchId = draft.ranchId,
+                        )
+                    }
+
+                    queries.insertBirthEvent(
+                        id = birthEventId,
+                        ranch_id = draft.ranchId,
+                        dam_id = draft.damId,
+                        sire_id = normalizedSireId,
+                        birth_date = cleanBirthDate,
+                        live_births = preparedLambs.size.toLong(),
+                        stillborns = draft.stillborns.toLong(),
+                        parturition_type = parturitionType.name,
+                        conception_method = draft.conceptionMethod.name,
+                        photo_s3_key = null,
+                        local_photo_path = persistedPhotoPath,
+                        registered_by_user_id = draft.registeredByUserId,
+                        notes = draft.notes?.trim()?.takeIf { it.isNotEmpty() },
+                        draft_key = normalizedDraftKey,
+                        created_at = occurredAt,
+                        updated_at = occurredAt
+                    )
+                }
 
                 BirthSaveResult.Success(
                     birthEventId = birthEventId,
-                    offspringIds = createdIds,
-                    mutationId = mutationId
+                    offspringIds = preparedLambs.map { it.childId },
+                    mutationId = mutation.mutationId
                 )
             }
         } catch (e: CancellationException) {
@@ -221,13 +265,14 @@ class SqlDelightBirthEventRepository(
 
     override suspend fun isLocalPhotoReferenced(localPhotoPath: String): Boolean =
         withContext(ioDispatcher) {
-            val birthCount = database.oviAppDatabaseQueries
-                .countBirthEventsByLocalPhoto(localPhotoPath)
-                .executeAsOne()
-            val syncCount = database.oviAppDatabaseQueries
-                .countPendingSyncEventsByLocalPhoto(localPhotoPath)
-                .executeAsOne()
-            birthCount > 0L || syncCount > 0L
+            val candidates = buildSet {
+                add(localPhotoPath)
+                LocalPhotoFileOps.canonicalize(localPhotoPath)?.let(::add)
+            }
+            candidates.any { path ->
+                database.oviAppDatabaseQueries.countBirthEventsByLocalPhoto(path).executeAsOne() > 0L ||
+                    database.oviAppDatabaseQueries.countPendingSyncEventsByLocalPhoto(path).executeAsOne() > 0L
+            }
         }
 
     override suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> =
@@ -244,7 +289,9 @@ class SqlDelightBirthEventRepository(
                 fun resolveFolio(animalId: String?): String? {
                     if (animalId == null) return null
                     return folioCache.getOrPut(animalId) {
-                        queries.selectAnimalById(animalId).executeAsOneOrNull()?.folio_interno
+                        queries.selectAnimalById(animalId).executeAsOneOrNull()
+                            ?.takeIf { it.ranch_id == ranchId }
+                            ?.folio_interno
                     }
                 }
 
@@ -303,53 +350,34 @@ class SqlDelightBirthEventRepository(
         }
 
     @Serializable
-    private data class SyncOffspringPayload(
+    private data class SyncBirthLambPayload(
         val id: String,
         val folioInterno: String,
-        val sex: String,
+        val siniigaChip: String? = null,
+        val registroUno: String? = null,
+        val adn: String? = null,
+        val breed: String,
         val color: String,
-        val birthWeightKg: Double
+        val sex: String,
+        val criador: String? = null,
+        val lifeStage: String = LifeStage.LAMB_LACTATING.name,
+        val reproductiveStatus: String = ReproductiveStatus.EMPTY.name,
+        val birthWeightKg: Double? = null,
+        val weightId: String? = null,
+        val photoS3Key: String? = null,
     )
 
     @Serializable
-    private data class SyncBirthEventPayload(
-        val birthEventId: String,
-        val ranchId: String,
+    private data class SyncBirthCreatePayload(
+        val id: String,
         val damId: String,
-        val sireId: String?,
+        val sireId: String? = null,
+        val externalSireFolio: String? = null,
         val birthDate: String,
-        val liveBirths: Int,
-        val stillborns: Int,
-        val parturitionType: String,
+        val liveBornCount: Int,
+        val stillbornCount: Int = 0,
         val conceptionMethod: String,
-        val offspring: List<SyncOffspringPayload>
+        val evidencePhotoS3Key: String? = null,
+        val lambs: List<SyncBirthLambPayload> = emptyList(),
     )
-}
-
-private fun formatEpochMillisToIsoUtc(epochMillis: Long): String {
-    val totalSeconds = epochMillis.floorDiv(1000L)
-    val second = totalSeconds.mod(60)
-    val totalMinutes = totalSeconds.floorDiv(60L)
-    val minute = totalMinutes.mod(60)
-    val totalHours = totalMinutes.floorDiv(60L)
-    val hour = totalHours.mod(24)
-    val daysSinceEpoch = totalHours.floorDiv(24L)
-
-    val z = daysSinceEpoch + 719468L
-    val era = (if (z >= 0) z else z - 146096L) / 146097L
-    val doe = z - era * 146097L
-    val yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
-    val y = yoe + era * 400L
-    val doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
-    val mp = (5L * doy + 2L) / 153L
-    val day = (doy - (153L * mp + 2L) / 5L + 1L).toInt()
-    val month = (mp + (if (mp < 10L) 3L else -9L)).toInt()
-    val year = (y + (if (month <= 2) 1L else 0L)).toInt()
-
-    return "${year.toString().padStart(4, '0')}-" +
-        "${month.toString().padStart(2, '0')}-" +
-        "${day.toString().padStart(2, '0')}T" +
-        "${hour.toString().padStart(2, '0')}:" +
-        "${minute.toString().padStart(2, '0')}:" +
-        "${second.toString().padStart(2, '0')}Z"
 }

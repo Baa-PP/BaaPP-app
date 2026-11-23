@@ -3,6 +3,7 @@ package com.agrotech.oviapp.births.domain.model
 import com.agrotech.oviapp.domain.model.ConceptionMethod
 import com.agrotech.oviapp.domain.model.ParturitionType
 import com.agrotech.oviapp.domain.model.Sex
+import com.agrotech.oviapp.weights.Decimals
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -40,6 +41,9 @@ data class BirthEventDraft(
     fun validate(todayDateIso: String): String? {
         if (damId.isBlank()) {
             return "Debes seleccionar a la madre del parto."
+        }
+        if (!sireId.isNullOrBlank() && sireId.trim() == damId.trim()) {
+            return "La madre y el semental no pueden ser el mismo ejemplar."
         }
         val cleanDate = birthDateIso.trim()
         val birthDay = parseIsoToEpochDay(cleanDate)
@@ -80,9 +84,9 @@ data class BirthEventDraft(
             if (child.color.trim().isEmpty()) {
                 return "$label: el color o capa es obligatorio."
             }
-            val weight = child.birthWeightKg.trim().toDoubleOrNull()
-            if (weight == null || !weight.isFinite() || weight <= 0.0 || weight > 25.0) {
-                return "$label: el peso al nacer debe ser un número positivo válido (ej. 3.5 kg)."
+            val parsedWeight = Decimals.parseHundredths(child.birthWeightKg)
+            if (parsedWeight == null || !parsedWeight.exact || parsedWeight.hundredths !in 1L..2500L) {
+                return "$label: el peso al nacer debe ser un número positivo válido de hasta 2 decimales (ej. 3.5 kg)."
             }
         }
         return null

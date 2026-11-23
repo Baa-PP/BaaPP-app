@@ -31,6 +31,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -57,16 +58,18 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agrotech.oviapp.android.BirthSaveUiState
+import com.agrotech.oviapp.android.ui.theme.FieldPalette
 import com.agrotech.oviapp.births.domain.model.BirthEventDraft
 import com.agrotech.oviapp.births.domain.model.LiveOffspringDraft
 import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
-import com.agrotech.oviapp.births.media.BirthPhotoCompressor
 import com.agrotech.oviapp.domain.model.ConceptionMethod
 import com.agrotech.oviapp.domain.model.ParturitionType
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
+import com.agrotech.oviapp.photos.LocalPhotoCompressor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -75,13 +78,12 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.time.LocalDate
 
-private val BaappPrimaryGreen = Color(0xFF1B5E20)
-private val BaappBackground = Color(0xFFF7F9F7)
+private val BaappPrimaryGreen = Color(FieldPalette.PASTURE)
 private val BaappSoftGreen = Color(0xFFE8F5E9)
-private val BaappFemalePink = Color(0xFFAD1457)
-private val BaappFemalePinkBg = Color(0xFFFCE4EC)
-private val BaappMaleBlue = Color(0xFF0D47A1)
-private val BaappMaleBlueBg = Color(0xFFE3F2FD)
+private val BaappFemalePink = Color(FieldPalette.FEMALE)
+private val BaappFemalePinkBg = Color(FieldPalette.FEMALE_CONTAINER)
+private val BaappMaleBlue = Color(FieldPalette.MALE)
+private val BaappMaleBlueBg = Color(FieldPalette.MALE_CONTAINER)
 private const val MAX_SOURCE_BIRTH_PHOTO_BYTES = 15 * 1024 * 1024
 private const val PENDING_BIRTH_PHOTOS_DIR = "pending_birth_photos"
 
@@ -102,12 +104,13 @@ fun BirthEventScreen(
     val scrollState = rememberScrollState()
     val draftKey = rememberSaveable(ranchId) { UuidV7.generate() }
 
-    var damId by rememberSaveable { mutableStateOf("") }
-    var sireId by rememberSaveable { mutableStateOf<String?>(null) }
-    var conceptionMethod by rememberSaveable { mutableStateOf(ConceptionMethod.MN) }
-    var birthDateIso by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
-    var stillborns by rememberSaveable { mutableIntStateOf(0) }
+    var damId by rememberSaveable(ranchId) { mutableStateOf("") }
+    var sireId by rememberSaveable(ranchId) { mutableStateOf<String?>(null) }
+    var conceptionMethod by rememberSaveable(ranchId) { mutableStateOf(ConceptionMethod.MN) }
+    var birthDateIso by rememberSaveable(ranchId) { mutableStateOf(LocalDate.now().toString()) }
+    var stillborns by rememberSaveable(ranchId) { mutableIntStateOf(0) }
     var liveOffspring by rememberSaveable(
+        ranchId,
         stateSaver = listSaver<List<LiveOffspringDraft>, String>(
             save = { list ->
                 listOf(list.size.toString()) +
@@ -129,13 +132,14 @@ fun BirthEventScreen(
         )
     ) { mutableStateOf(listOf(LiveOffspringDraft())) }
 
-    var localPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
-    var photoSizeBytes by rememberSaveable { mutableStateOf<Int?>(null) }
+    var localPhotoPath by rememberSaveable(ranchId) { mutableStateOf<String?>(null) }
+    var photoSizeBytes by rememberSaveable(ranchId) { mutableStateOf<Int?>(null) }
     var draftCreatedPhotos by rememberSaveable(
+        ranchId,
         stateSaver = listSaver(save = { it }, restore = { it })
     ) { mutableStateOf(emptyList<String>()) }
-    var committedPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
-    var notes by rememberSaveable { mutableStateOf("") }
+    var committedPhotoPath by rememberSaveable(ranchId) { mutableStateOf<String?>(null) }
+    var notes by rememberSaveable(ranchId) { mutableStateOf("") }
 
     var damsList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var siresList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
@@ -143,7 +147,7 @@ fun BirthEventScreen(
     var loadFailed by remember { mutableStateOf(false) }
     var retryTrigger by remember { mutableIntStateOf(0) }
     var isCompressingPhoto by remember { mutableStateOf(false) }
-    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var errorMessage by rememberSaveable(ranchId) { mutableStateOf<String?>(null) }
 
     var damExpanded by remember { mutableStateOf(false) }
     var sireExpanded by remember { mutableStateOf(false) }
@@ -155,13 +159,15 @@ fun BirthEventScreen(
             is BirthSaveUiState.Success -> {
                 if (saveState.draftKey == draftKey) {
                     committedPhotoPath = saveState.localPhotoPath
-                    draftCreatedPhotos
-                        .filter { it != saveState.localPhotoPath && it != committedPhotoPath }
-                        .forEach { obsolete ->
-                            if (!birthEventRepository.isLocalPhotoReferenced(obsolete)) {
-                                deleteBirthPhotoIfOwned(context.filesDir, obsolete)
-                            }
+                    val obsolete = draftCreatedPhotos.filter {
+                        it != saveState.localPhotoPath && it != committedPhotoPath
+                    }
+                    val unreferenced = obsolete.filterNot { birthEventRepository.isLocalPhotoReferenced(it) }
+                    if (unreferenced.isNotEmpty()) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            unreferenced.forEach { deleteBirthPhotoIfOwned(context.filesDir, it) }
                         }
+                    }
                     draftCreatedPhotos = emptyList()
                     onResetSaveState()
                     onNavigateBack()
@@ -184,13 +190,13 @@ fun BirthEventScreen(
             isCancelling = true
             scope.launch {
                 try {
-                    draftCreatedPhotos
-                        .filter { it != committedPhotoPath }
-                        .forEach { path ->
-                            if (!birthEventRepository.isLocalPhotoReferenced(path)) {
-                                deleteBirthPhotoIfOwned(context.filesDir, path)
-                            }
+                    val candidates = draftCreatedPhotos.filter { it != committedPhotoPath }
+                    val unreferenced = candidates.filterNot { birthEventRepository.isLocalPhotoReferenced(it) }
+                    if (unreferenced.isNotEmpty()) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            unreferenced.forEach { deleteBirthPhotoIfOwned(context.filesDir, it) }
                         }
+                    }
                     draftCreatedPhotos = emptyList()
                     onResetSaveState()
                     onNavigateBack()
@@ -241,7 +247,7 @@ fun BirthEventScreen(
                         val stream = context.contentResolver.openInputStream(uri)
                             ?: throw IllegalStateException("No se pudo abrir la fotografía seleccionada.")
                         val inputBytes = stream.use { readBoundedBirthPhotoBytes(it, MAX_SOURCE_BIRTH_PHOTO_BYTES) }
-                        val compressed = BirthPhotoCompressor.compressToTarget(inputBytes, 200 * 1024)
+                        val compressed = LocalPhotoCompressor.compressToTarget(inputBytes, maxBytes = 200 * 1024).bytes
                         val photosDir = File(context.filesDir, PENDING_BIRTH_PHOTOS_DIR).apply { mkdirs() }
                         val photoFile = File(photosDir, "birth_${System.currentTimeMillis()}.jpg")
                         createdFile = photoFile
@@ -251,7 +257,9 @@ fun BirthEventScreen(
                     val (newPath, compressedSize) = result
                     if (isCancelling) {
                         if (!birthEventRepository.isLocalPhotoReferenced(newPath)) {
-                            deleteBirthPhotoIfOwned(context.filesDir, newPath)
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                deleteBirthPhotoIfOwned(context.filesDir, newPath)
+                            }
                         }
                         return@launch
                     }
@@ -260,16 +268,26 @@ fun BirthEventScreen(
                         previousPath != committedPhotoPath &&
                         !birthEventRepository.isLocalPhotoReferenced(previousPath)
                     ) {
-                        deleteBirthPhotoIfOwned(context.filesDir, previousPath)
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            deleteBirthPhotoIfOwned(context.filesDir, previousPath)
+                        }
                     }
                     draftCreatedPhotos = draftCreatedPhotos.filterNot { it == previousPath } + newPath
                     localPhotoPath = newPath
                     photoSizeBytes = compressedSize
                 } catch (e: CancellationException) {
-                    createdFile?.let { deleteBirthPhotoIfOwned(context.filesDir, it.absolutePath) }
+                    createdFile?.let { file ->
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            deleteBirthPhotoIfOwned(context.filesDir, file.absolutePath)
+                        }
+                    }
                     throw e
                 } catch (e: Exception) {
-                    createdFile?.let { deleteBirthPhotoIfOwned(context.filesDir, it.absolutePath) }
+                    createdFile?.let { file ->
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            deleteBirthPhotoIfOwned(context.filesDir, file.absolutePath)
+                        }
+                    }
                     errorMessage = "Error procesando fotografía: ${e.message}"
                 } finally {
                     isCompressingPhoto = false
@@ -312,18 +330,18 @@ fun BirthEventScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(BaappBackground)
+                        .background(MaterialTheme.colorScheme.background)
                         .padding(innerPadding),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = BaappPrimaryGreen)
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
             loadFailed -> {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(BaappBackground)
+                        .background(MaterialTheme.colorScheme.background)
                         .padding(innerPadding)
                         .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -331,14 +349,14 @@ fun BirthEventScreen(
                 ) {
                     Text(
                         text = errorMessage ?: "Error cargando progenitores.",
-                        color = Color(0xFFB71C1C),
+                        color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { retryTrigger++ },
                         modifier = Modifier.heightIn(min = 56.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
                         Text("Reintentar")
                     }
@@ -348,7 +366,7 @@ fun BirthEventScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(BaappBackground)
+                        .background(MaterialTheme.colorScheme.background)
                         .padding(innerPadding)
                         .padding(16.dp)
                         .verticalScroll(scrollState),
@@ -362,7 +380,7 @@ fun BirthEventScreen(
                         ) {
                             Text(
                                 text = errorMessage!!,
-                                color = Color(0xFFB71C1C),
+                                color = Color(FieldPalette.ALERT),
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                                 modifier = Modifier.padding(12.dp)
                             )
@@ -373,7 +391,7 @@ fun BirthEventScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
@@ -398,7 +416,7 @@ fun BirthEventScreen(
                                     enabled = !isSaving,
                                     label = { Text("Madre (Hembra del rancho) *") },
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = damExpanded) },
-                                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                     shape = RoundedCornerShape(8.dp)
                                 )
                                 ExposedDropdownMenu(
@@ -431,7 +449,7 @@ fun BirthEventScreen(
                                     enabled = !isSaving,
                                     label = { Text("Semental (Opcional)") },
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sireExpanded) },
-                                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                     shape = RoundedCornerShape(8.dp)
                                 )
                                 ExposedDropdownMenu(
@@ -496,7 +514,7 @@ fun BirthEventScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
@@ -562,7 +580,7 @@ fun BirthEventScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.White)
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
                             Column(
                                 modifier = Modifier.padding(16.dp),
@@ -663,7 +681,7 @@ fun BirthEventScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
                         Column(
                             modifier = Modifier.padding(16.dp),
@@ -704,7 +722,7 @@ fun BirthEventScreen(
                             if (localPhotoPath != null) {
                                 Text(
                                     text = "Archivo local: ${localPhotoPath!!.substringAfterLast('/')}",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 )
                             }
                         }
@@ -822,9 +840,11 @@ private fun readBoundedBirthPhotoBytes(inputStream: InputStream, maxBytes: Int):
 
 private fun deleteBirthPhotoIfOwned(filesDir: File, path: String?) {
     if (path.isNullOrBlank()) return
-    val ownedDir = File(filesDir, PENDING_BIRTH_PHOTOS_DIR).canonicalFile
-    val target = File(path).canonicalFile
-    if (target.parentFile == ownedDir && target.exists()) {
-        target.delete()
+    runCatching {
+        val ownedDir = File(filesDir, PENDING_BIRTH_PHOTOS_DIR).canonicalFile
+        val target = File(path).canonicalFile
+        if (target.parentFile == ownedDir && target.isFile) {
+            target.delete()
+        }
     }
 }

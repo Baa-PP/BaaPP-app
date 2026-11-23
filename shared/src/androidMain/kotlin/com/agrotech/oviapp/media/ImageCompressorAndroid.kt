@@ -1,4 +1,4 @@
-package com.agrotech.oviapp.births.media
+package com.agrotech.oviapp.media
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -6,28 +6,26 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.File
 import kotlin.math.roundToInt
 
-internal actual fun isReadableLocalPhotoFile(path: String): Boolean {
-    val file = File(path)
-    return file.isFile && file.canRead() && file.length() > 0L
-}
-
-actual object BirthPhotoCompressor {
+actual object ImageCompressor {
     actual fun compressToTarget(inputBytes: ByteArray, maxBytes: Int): ByteArray {
         if (inputBytes.isEmpty()) {
             throw IllegalArgumentException("La fotografía está vacía.")
         }
 
+        // First decode dimensions only
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, options)
+
         val srcWidth = options.outWidth
         val srcHeight = options.outHeight
+
         if (srcWidth <= 0 || srcHeight <= 0) {
             throw IllegalArgumentException("No se pudo decodificar la fotografía seleccionada.")
         }
 
+        // Scale down if resolution is larger than full HD (1920x1080) to conserve memory in field conditions
         val maxDim = 1920
         var sampleSize = 1
         val largestDim = maxOf(srcWidth, srcHeight)
@@ -37,7 +35,7 @@ actual object BirthPhotoCompressor {
 
         val decodeOptions = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.RGB_565
+            inPreferredConfig = Bitmap.Config.RGB_565 // 2 bytes per pixel
         }
 
         val decodedBitmap = BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, decodeOptions)
@@ -54,6 +52,7 @@ actual object BirthPhotoCompressor {
             }
             var compressed = outputStream.toByteArray()
 
+            // Iteratively lower quality or resize if still exceeding maxBytes (~150-200 KB target)
             while (compressed.size > maxBytes && quality > 40) {
                 quality -= 15
                 outputStream = ByteArrayOutputStream()
@@ -63,10 +62,11 @@ actual object BirthPhotoCompressor {
                 compressed = outputStream.toByteArray()
             }
 
-            while (compressed.size > maxBytes && maxOf(currentBitmap.width, currentBitmap.height) > 100) {
+            // If still over budget after quality 40, downscale dimensions
+            while (compressed.size > maxBytes && currentBitmap.width > 400 && currentBitmap.height > 400) {
                 val scaleFactor = 0.75f
-                val newWidth = maxOf(1, (currentBitmap.width * scaleFactor).roundToInt())
-                val newHeight = maxOf(1, (currentBitmap.height * scaleFactor).roundToInt())
+                val newWidth = (currentBitmap.width * scaleFactor).roundToInt()
+                val newHeight = (currentBitmap.height * scaleFactor).roundToInt()
                 val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, newWidth, newHeight, true)
                 if (currentBitmap != originalBitmap) {
                     currentBitmap.recycle()
@@ -77,12 +77,6 @@ actual object BirthPhotoCompressor {
                     throw IllegalStateException("No se pudo comprimir la fotografía.")
                 }
                 compressed = outputStream.toByteArray()
-            }
-
-            if (compressed.size > maxBytes) {
-                throw IllegalStateException(
-                    "No se pudo comprimir la fotografía por debajo de ${maxBytes / 1024} KB."
-                )
             }
 
             return compressed
