@@ -44,7 +44,7 @@ CREATE TABLE local_birth_events (
     local_photo_path TEXT,
     registered_by_user_id TEXT,
     notes TEXT,
-    draft_key TEXT UNIQUE,
+    draft_key TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -87,6 +87,7 @@ CREATE INDEX idx_local_animals_weaning_pending ON local_animals (birth_date, sta
 
 CREATE INDEX idx_local_birth_events_ranch_date ON local_birth_events (ranch_id, birth_date DESC);
 CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
+CREATE UNIQUE INDEX idx_local_birth_events_draft_key ON local_birth_events (draft_key);
 
 CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
@@ -269,7 +270,7 @@ SELECT COUNT(*) FROM pending_sync_events
 WHERE sync_status = 'PENDING' AND local_photo_path = :localPhotoPath;
 
 insertBirthEvent:
-INSERT OR REPLACE INTO local_birth_events (
+INSERT INTO local_birth_events (
     id, ranch_id, dam_id, sire_id, birth_date,
     live_births, stillborns, parturition_type, conception_method,
     photo_s3_key, local_photo_path, registered_by_user_id, notes,
