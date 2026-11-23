@@ -3,6 +3,7 @@ package com.agrotech.oviapp.births.data
 import com.agrotech.oviapp.births.domain.model.BirthEventDraft
 import com.agrotech.oviapp.births.domain.model.BirthSaveResult
 import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
+import com.agrotech.oviapp.births.media.isReadableLocalPhotoFile
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.AnimalStatus
 import com.agrotech.oviapp.domain.model.EntryReason
@@ -22,7 +23,8 @@ import kotlinx.serialization.json.Json
 class SqlDelightBirthEventRepository(
     private val database: OviAppDatabase,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val clockMillis: () -> Long = ::currentEpochMillis
+    private val clockMillis: () -> Long = ::currentEpochMillis,
+    private val photoExistsCheck: (String) -> Boolean = ::isReadableLocalPhotoFile
 ) : BirthEventRepository {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -36,11 +38,19 @@ class SqlDelightBirthEventRepository(
             return@withContext BirthSaveResult.ValidationError(validationError)
         }
 
+        val cleanPhotoPath = draft.localPhotoPath?.trim()
+        if (cleanPhotoPath.isNullOrEmpty() || !photoExistsCheck(cleanPhotoPath)) {
+            return@withContext BirthSaveResult.ValidationError(
+                "La fotografía seleccionada no existe o no se puede leer."
+            )
+        }
+
         val birthEventId = UuidV7.generate()
         val mutationId = UuidV7.generate()
         val occurredAt = formatEpochMillisToIsoUtc(clockMillis())
         val parturitionType = draft.deducedParturitionType()
         val cleanBirthDate = draft.birthDateIso.trim()
+        val normalizedSireId = draft.sireId?.trim()?.takeIf { it.isNotEmpty() }
 
         try {
             database.transactionWithResult {
@@ -53,9 +63,9 @@ class SqlDelightBirthEventRepository(
                     )
                 }
 
-                if (!draft.sireId.isNullOrBlank()) {
+                if (normalizedSireId != null) {
                     val sire = database.oviAppDatabaseQueries
-                        .selectAnimalById(draft.sireId)
+                        .selectAnimalById(normalizedSireId)
                         .executeAsOneOrNull()
                     if (sire == null || sire.ranch_id != draft.ranchId || sire.sex != Sex.MALE.name) {
                         return@transactionWithResult BirthSaveResult.ValidationError(
@@ -64,9 +74,7 @@ class SqlDelightBirthEventRepository(
                     }
                 }
 
-                val offspringPayloads = mutableListOf<SyncOffspringPayload>()
-                val createdIds = mutableListOf<String>()
-
+                // Validate all offspring folios before inserting any rows so a conflict never partially commits
                 for (child in draft.liveOffspring) {
                     val cleanFolio = child.folioInterno.trim()
                     val existing = database.oviAppDatabaseQueries
@@ -77,7 +85,13 @@ class SqlDelightBirthEventRepository(
                             "Ya existe un ejemplar con el arete '$cleanFolio' en este rancho."
                         )
                     }
+                }
 
+                val offspringPayloads = mutableListOf<SyncOffspringPayload>()
+                val createdIds = mutableListOf<String>()
+
+                for (child in draft.liveOffspring) {
+                    val cleanFolio = child.folioInterno.trim()
                     val childId = UuidV7.generate()
                     val weightId = UuidV7.generate()
                     val weightKg = child.birthWeightKg.trim().toDouble()
@@ -96,7 +110,7 @@ class SqlDelightBirthEventRepository(
                         weaning_date = null,
                         parturition_type = parturitionType.name,
                         conception_method = draft.conceptionMethod.name,
-                        sire_id = draft.sireId,
+                        sire_id = normalizedSireId,
                         dam_id = draft.damId,
                         external_sire_folio = null,
                         external_dam_folio = null,
@@ -141,14 +155,14 @@ class SqlDelightBirthEventRepository(
                     id = birthEventId,
                     ranch_id = draft.ranchId,
                     dam_id = draft.damId,
-                    sire_id = draft.sireId,
+                    sire_id = normalizedSireId,
                     birth_date = cleanBirthDate,
                     live_births = draft.liveOffspring.size.toLong(),
                     stillborns = draft.stillborns.toLong(),
                     parturition_type = parturitionType.name,
                     conception_method = draft.conceptionMethod.name,
                     photo_s3_key = null,
-                    local_photo_path = draft.localPhotoPath,
+                    local_photo_path = cleanPhotoPath,
                     registered_by_user_id = draft.registeredByUserId,
                     notes = draft.notes?.trim()?.takeIf { it.isNotEmpty() },
                     created_at = occurredAt,
@@ -159,7 +173,7 @@ class SqlDelightBirthEventRepository(
                     birthEventId = birthEventId,
                     ranchId = draft.ranchId,
                     damId = draft.damId,
-                    sireId = draft.sireId,
+                    sireId = normalizedSireId,
                     birthDate = cleanBirthDate,
                     liveBirths = draft.liveOffspring.size,
                     stillborns = draft.stillborns,
@@ -174,7 +188,7 @@ class SqlDelightBirthEventRepository(
                     operation = "CREATE",
                     occurred_at = occurredAt,
                     payload_json = json.encodeToString(syncPayload),
-                    local_photo_path = draft.localPhotoPath
+                    local_photo_path = cleanPhotoPath
                 )
 
                 BirthSaveResult.Success(
@@ -190,6 +204,17 @@ class SqlDelightBirthEventRepository(
         }
     }
 
+    override suspend fun isLocalPhotoReferenced(localPhotoPath: String): Boolean =
+        withContext(ioDispatcher) {
+            val birthCount = database.oviAppDatabaseQueries
+                .countBirthEventsByLocalPhoto(localPhotoPath)
+                .executeAsOne()
+            val syncCount = database.oviAppDatabaseQueries
+                .countPendingSyncEventsByLocalPhoto(localPhotoPath)
+                .executeAsOne()
+            birthCount > 0L || syncCount > 0L
+        }
+
     override suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> =
         loadParentsBySex(ranchId, Sex.FEMALE)
 
@@ -198,19 +223,21 @@ class SqlDelightBirthEventRepository(
 
     private suspend fun loadParentsBySex(ranchId: String, sex: Sex): List<Pair<String, String>> =
         withContext(ioDispatcher) {
-            val pageSize = 200L
-            var offset = 0L
-            val all = mutableListOf<Pair<String, String>>()
-            while (true) {
-                val batch = database.oviAppDatabaseQueries
-                    .selectAnimalsBySexPaged(ranchId, sex.name, pageSize, offset)
-                    .executeAsList()
-                    .map { it.id to it.folio_interno }
-                all.addAll(batch)
-                if (batch.size.toLong() < pageSize) break
-                offset += pageSize
+            database.transactionWithResult {
+                val pageSize = 200L
+                var offset = 0L
+                val all = mutableListOf<Pair<String, String>>()
+                while (true) {
+                    val batch = database.oviAppDatabaseQueries
+                        .selectAnimalsBySexPaged(ranchId, sex.name, pageSize, offset)
+                        .executeAsList()
+                        .map { it.id to it.folio_interno }
+                    all.addAll(batch)
+                    if (batch.size.toLong() < pageSize) break
+                    offset += pageSize
+                }
+                all
             }
-            all
         }
 
     @Serializable

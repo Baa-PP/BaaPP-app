@@ -42,11 +42,16 @@ data class BirthEventDraft(
             return "Debes seleccionar a la madre del parto."
         }
         val cleanDate = birthDateIso.trim()
-        if (!isValidIsoDate(cleanDate)) {
-            return "La fecha de parto debe tener formato válido YYYY-MM-DD."
-        }
-        if (isValidIsoDate(todayDateIso.trim()) && cleanDate > todayDateIso.trim()) {
+        val birthDay = parseIsoToEpochDay(cleanDate)
+            ?: return "La fecha de parto debe tener formato válido YYYY-MM-DD."
+        val todayDay = parseIsoToEpochDay(todayDateIso.trim())
+            ?: return "La fecha de referencia debe tener formato válido YYYY-MM-DD."
+        val daysElapsed = todayDay - birthDay
+        if (daysElapsed < 0L) {
             return "La fecha de parto no puede ser futura."
+        }
+        if (daysElapsed > 30L) {
+            return "Ventana de 30 días cerrada. Solicite el alta auditada a la Asociación/Técnico con su evidencia fotográfica."
         }
         if (stillborns < 0) {
             return "El número de nacidos muertos no puede ser negativo."
@@ -76,7 +81,7 @@ data class BirthEventDraft(
                 return "$label: el color o capa es obligatorio."
             }
             val weight = child.birthWeightKg.trim().toDoubleOrNull()
-            if (weight == null || weight <= 0.0 || weight > 25.0) {
+            if (weight == null || !weight.isFinite() || weight <= 0.0 || weight > 25.0) {
                 return "$label: el peso al nacer debe ser un número positivo válido (ej. 3.5 kg)."
             }
         }
@@ -86,20 +91,29 @@ data class BirthEventDraft(
     companion object {
         private val ISO_DATE_REGEX = Regex("^(\\d{4})-(\\d{2})-(\\d{2})$")
 
-        fun isValidIsoDate(value: String): Boolean {
-            val match = ISO_DATE_REGEX.matchEntire(value) ?: return false
-            val year = match.groupValues[1].toIntOrNull() ?: return false
-            val month = match.groupValues[2].toIntOrNull() ?: return false
-            val day = match.groupValues[3].toIntOrNull() ?: return false
-            if (year !in 1900..9999 || month !in 1..12) return false
+        fun isValidIsoDate(value: String): Boolean = parseIsoToEpochDay(value) != null
+
+        private fun parseIsoToEpochDay(value: String): Long? {
+            val match = ISO_DATE_REGEX.matchEntire(value) ?: return null
+            val year = match.groupValues[1].toIntOrNull() ?: return null
+            val month = match.groupValues[2].toIntOrNull() ?: return null
+            val day = match.groupValues[3].toIntOrNull() ?: return null
+            if (year !in 1900..9999 || month !in 1..12) return null
             val isLeapYear = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
             val maxDay = when (month) {
                 1, 3, 5, 7, 8, 10, 12 -> 31
                 4, 6, 9, 11 -> 30
                 2 -> if (isLeapYear) 29 else 28
-                else -> return false
+                else -> return null
             }
-            return day in 1..maxDay
+            if (day !in 1..maxDay) return null
+            val y = year.toLong() - if (month <= 2) 1L else 0L
+            val era = (if (y >= 0) y else y - 399L) / 400L
+            val yoe = y - era * 400L
+            val m = month.toLong()
+            val doy = (153L * (m + if (m > 2) -3L else 9L) + 2L) / 5L + day.toLong() - 1L
+            val doe = yoe * 365L + yoe / 4L - yoe / 100L + doy
+            return era * 146097L + doe - 719468L
         }
     }
 }

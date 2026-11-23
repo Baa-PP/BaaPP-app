@@ -254,6 +254,14 @@ SELECT * FROM local_birth_events
 WHERE dam_id = :damId
 ORDER BY birth_date DESC;
 
+countBirthEventsByLocalPhoto:
+SELECT COUNT(*) FROM local_birth_events
+WHERE local_photo_path = :localPhotoPath;
+
+countPendingSyncEventsByLocalPhoto:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status = 'PENDING' AND local_photo_path = :localPhotoPath;
+
 insertBirthEvent:
 INSERT OR REPLACE INTO local_birth_events (
     id, ranch_id, dam_id, sire_id, birth_date,

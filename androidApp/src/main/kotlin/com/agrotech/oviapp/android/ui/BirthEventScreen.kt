@@ -122,7 +122,7 @@ fun BirthEventScreen(
                             birthWeightKg = chunk[3]
                         )
                     } else null
-                }.ifEmpty { listOf(LiveOffspringDraft()) }
+                }
             }
         )
     ) { mutableStateOf(listOf(LiveOffspringDraft())) }
@@ -155,7 +155,11 @@ fun BirthEventScreen(
                     committedPhotoPath = saveState.localPhotoPath
                     draftCreatedPhotos
                         .filter { it != saveState.localPhotoPath && it != committedPhotoPath }
-                        .forEach { obsolete -> deleteBirthPhotoIfOwned(context.filesDir, obsolete) }
+                        .forEach { obsolete ->
+                            if (!birthEventRepository.isLocalPhotoReferenced(obsolete)) {
+                                deleteBirthPhotoIfOwned(context.filesDir, obsolete)
+                            }
+                        }
                     draftCreatedPhotos = emptyList()
                     onResetSaveState()
                     onNavigateBack()
@@ -171,17 +175,33 @@ fun BirthEventScreen(
         }
     }
 
+    var isCancelling by remember { mutableStateOf(false) }
+
     val handleCancelAndCleanup: () -> Unit = {
-        draftCreatedPhotos
-            .filter { it != committedPhotoPath }
-            .forEach { path -> deleteBirthPhotoIfOwned(context.filesDir, path) }
-        draftCreatedPhotos = emptyList()
-        onResetSaveState()
-        onNavigateBack()
+        if (!isCancelling) {
+            isCancelling = true
+            scope.launch {
+                try {
+                    draftCreatedPhotos
+                        .filter { it != committedPhotoPath }
+                        .forEach { path ->
+                            if (!birthEventRepository.isLocalPhotoReferenced(path)) {
+                                deleteBirthPhotoIfOwned(context.filesDir, path)
+                            }
+                        }
+                    draftCreatedPhotos = emptyList()
+                    onResetSaveState()
+                    onNavigateBack()
+                } catch (e: CancellationException) {
+                    isCancelling = false
+                    throw e
+                }
+            }
+        }
     }
 
     BackHandler(enabled = true) {
-        if (!isSaving) {
+        if (!isSaving && !isCancelling) {
             handleCancelAndCleanup()
         }
     }
@@ -224,10 +244,14 @@ fun BirthEventScreen(
                         photoFile.absolutePath to compressed.size
                     }
                     val (newPath, compressedSize) = result
-                    if (localPhotoPath != committedPhotoPath) {
-                        deleteBirthPhotoIfOwned(context.filesDir, localPhotoPath)
+                    val previousPath = localPhotoPath
+                    if (previousPath != null &&
+                        previousPath != committedPhotoPath &&
+                        !birthEventRepository.isLocalPhotoReferenced(previousPath)
+                    ) {
+                        deleteBirthPhotoIfOwned(context.filesDir, previousPath)
                     }
-                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath } + newPath
+                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == previousPath } + newPath
                     localPhotoPath = newPath
                     photoSizeBytes = compressedSize
                 } catch (e: CancellationException) {

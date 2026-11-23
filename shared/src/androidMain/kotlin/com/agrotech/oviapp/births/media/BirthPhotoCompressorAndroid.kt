@@ -6,7 +6,13 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import kotlin.math.roundToInt
+
+internal actual fun isReadableLocalPhotoFile(path: String): Boolean {
+    val file = File(path)
+    return file.isFile && file.canRead() && file.length() > 0L
+}
 
 actual object BirthPhotoCompressor {
     actual fun compressToTarget(inputBytes: ByteArray, maxBytes: Int): ByteArray {
@@ -57,10 +63,10 @@ actual object BirthPhotoCompressor {
                 compressed = outputStream.toByteArray()
             }
 
-            while (compressed.size > maxBytes && currentBitmap.width > 400 && currentBitmap.height > 400) {
+            while (compressed.size > maxBytes && maxOf(currentBitmap.width, currentBitmap.height) > 100) {
                 val scaleFactor = 0.75f
-                val newWidth = (currentBitmap.width * scaleFactor).roundToInt()
-                val newHeight = (currentBitmap.height * scaleFactor).roundToInt()
+                val newWidth = maxOf(1, (currentBitmap.width * scaleFactor).roundToInt())
+                val newHeight = maxOf(1, (currentBitmap.height * scaleFactor).roundToInt())
                 val scaledBitmap = Bitmap.createScaledBitmap(currentBitmap, newWidth, newHeight, true)
                 if (currentBitmap != originalBitmap) {
                     currentBitmap.recycle()
@@ -71,6 +77,12 @@ actual object BirthPhotoCompressor {
                     throw IllegalStateException("No se pudo comprimir la fotografía.")
                 }
                 compressed = outputStream.toByteArray()
+            }
+
+            if (compressed.size > maxBytes) {
+                throw IllegalStateException(
+                    "No se pudo comprimir la fotografía por debajo de ${maxBytes / 1024} KB."
+                )
             }
 
             return compressed

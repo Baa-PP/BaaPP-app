@@ -30,7 +30,10 @@ class SqlDelightBirthEventRepositoryTest {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
-        repository = SqlDelightBirthEventRepository(database)
+        repository = SqlDelightBirthEventRepository(
+            database = database,
+            photoExistsCheck = { true }
+        )
     }
 
     @Test
@@ -130,6 +133,57 @@ class SqlDelightBirthEventRepositoryTest {
         assertIs<BirthSaveResult.DuplicateFolio>(result)
         assertTrue(database.oviAppDatabaseQueries.selectBirthEventsByDam(damId).executeAsList().isEmpty())
         assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
+        assertEquals(
+            null,
+            database.oviAppDatabaseQueries.selectAnimalByFolio(ranchId, "CRIA-NUEVA").executeAsOneOrNull()
+        )
+        assertTrue(database.oviAppDatabaseQueries.selectOffspringByParent(damId).executeAsList().isEmpty())
+    }
+
+    @Test
+    fun testBirthDateWindowAndWeightValidationAndMissingPhotoFile() = runTest {
+        val ranchId = "ranch-val"
+        val damId = insertAdult(ranchId, "MADRE-VAL", Sex.FEMALE)
+
+        // Day 30 inclusive is valid ("2026-10-23" when today is "2026-11-22")
+        val day30Draft = BirthEventDraft(
+            ranchId = ranchId,
+            damId = damId,
+            sireId = "   ", // whitespace normalized to null
+            birthDateIso = "2026-10-23",
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-30", Sex.FEMALE, "Blanco", "3.0")),
+            localPhotoPath = "/tmp/valid.jpg"
+        )
+        val day30Res = repository.saveBirthEventOffline(day30Draft, "2026-11-22")
+        assertIs<BirthSaveResult.Success>(day30Res)
+        assertEquals(
+            null,
+            database.oviAppDatabaseQueries.selectBirthEventById(day30Res.birthEventId).executeAsOne().sire_id
+        )
+
+        // Day 31 rejected
+        val day31Draft = day30Draft.copy(
+            birthDateIso = "2026-10-22",
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-31", Sex.FEMALE, "Blanco", "3.0"))
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(day31Draft, "2026-11-22"))
+
+        // Non-finite weight rejected
+        val nanWeight = day30Draft.copy(
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-NAN", Sex.FEMALE, "Blanco", "NaN"))
+        )
+        assertIs<BirthSaveResult.ValidationError>(repository.saveBirthEventOffline(nanWeight, "2026-11-22"))
+
+        // Missing/unreadable photo file rejected before writes
+        val strictRepo = SqlDelightBirthEventRepository(
+            database = database,
+            photoExistsCheck = { false }
+        )
+        val missingFileRes = strictRepo.saveBirthEventOffline(
+            day30Draft.copy(liveOffspring = listOf(LiveOffspringDraft("CRIA-MISS", Sex.FEMALE, "Blanco", "3.0"))),
+            "2026-11-22"
+        )
+        assertIs<BirthSaveResult.ValidationError>(missingFileRes)
     }
 
     private fun insertAdult(ranchId: String, folio: String, sex: Sex): String {
