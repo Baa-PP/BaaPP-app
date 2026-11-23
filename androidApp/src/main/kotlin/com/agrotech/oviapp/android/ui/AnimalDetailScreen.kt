@@ -1,6 +1,9 @@
 package com.agrotech.oviapp.android.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,16 +15,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -38,26 +46,41 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.agrotech.oviapp.animals.domain.model.AnimalDetailWithGenealogy
 import com.agrotech.oviapp.animals.domain.model.OffspringSummary
 import com.agrotech.oviapp.animals.domain.repository.AnimalInventoryRepository
 import com.agrotech.oviapp.domain.model.Animal
+import com.agrotech.oviapp.domain.model.AnimalAgeCalculator
 import com.agrotech.oviapp.domain.model.AnimalStatus
 import com.agrotech.oviapp.domain.model.LifeStage
 import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.time.LocalDate
 
 private val BaappPrimaryGreen = Color(0xFF1B5E20)
 private val BaappBackground = Color(0xFFF7F9F7)
 private val BaappSoftGreen = Color(0xFFE8F5E9)
-private val BaappFemalePink = Color(0xFFD81B60)
+private val BaappFemalePink = Color(0xFFAD1457)
 private val BaappFemalePinkBg = Color(0xFFFCE4EC)
-private val BaappMaleBlue = Color(0xFF1565C0)
+private val BaappMaleBlue = Color(0xFF0D47A1)
 private val BaappMaleBlueBg = Color(0xFFE3F2FD)
+private val BaappHighContrastText = Color(0xFF1A1A1A)
+private const val MAX_REMOTE_PHOTO_BYTES = 5 * 1024 * 1024
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,13 +117,24 @@ fun AnimalDetailScreen(
     }
 
     val scrollState = rememberScrollState()
+    val headerColor = when (detail?.animal?.sex) {
+        Sex.FEMALE -> BaappFemalePink
+        Sex.MALE -> BaappMaleBlue
+        null -> BaappPrimaryGreen
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
+                    val current = detail?.animal
                     Text(
-                        text = detail?.animal?.let { "Ficha: ${it.folioInterno}" } ?: "Ficha del Ejemplar",
+                        text = if (current != null) {
+                            val sexTag = if (current.sex == Sex.MALE) "♂ Macho" else "♀ Hembra"
+                            "$sexTag · ${current.folioInterno}"
+                        } else {
+                            "Ficha del Ejemplar"
+                        },
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -118,7 +152,7 @@ fun AnimalDetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = BaappPrimaryGreen,
+                    containerColor = headerColor,
                     titleContentColor = Color.White
                 )
             )
@@ -172,6 +206,12 @@ fun AnimalDetailScreen(
                     ) {
                         AnimalSummaryCard(animal = animal)
 
+                        AnimalPhotoCard(
+                            folioInterno = animal.folioInterno,
+                            localPhotoPath = data.localPhotoPath,
+                            photoS3Key = animal.photoS3Key
+                        )
+
                         GenealogyParentsCard(
                             animal = animal,
                             dam = data.dam,
@@ -193,11 +233,211 @@ fun AnimalDetailScreen(
 @Composable
 private fun AnimalSummaryCard(animal: Animal) {
     val isMale = animal.sex == Sex.MALE
-    val sexLabel = if (isMale) "♂ Semental / Macho" else "♀ Hembra"
-    val sexColor = if (isMale) BaappMaleBlue else BaappFemalePink
-    val sexBg = if (isMale) BaappMaleBlueBg else BaappFemalePinkBg
+    val sexLabel = if (isMale) "♂ MACHO (SEMENTAL)" else "♀ HEMBRA"
+    val sexHeaderBg = if (isMale) BaappMaleBlue else BaappFemalePink
+    val sexIcon = if (isMale) Icons.Filled.Face else Icons.Filled.Info
 
     val (statusText, statusBg, statusColor) = statusPresentation(animal.status, animal.sex)
+
+    val referenceDateIso = if (animal.status == AnimalStatus.DECEASED && !animal.mortalityDateIso.isNullOrBlank()) {
+        animal.mortalityDateIso!!
+    } else {
+        LocalDate.now().toString()
+    }
+    val dynamicAge = remember(animal.birthDateIso, referenceDateIso) {
+        AnimalAgeCalculator.calculateAge(animal.birthDateIso, referenceDateIso)
+    }
+    val ageLabelPrefix = if (animal.status == AnimalStatus.DECEASED && !animal.mortalityDateIso.isNullOrBlank()) {
+        "Edad al fallecer"
+    } else {
+        "Edad dinámica"
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // High-contrast sex header (color is never the sole indicator: always icon + text)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(sexHeaderBg)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = sexIcon,
+                        contentDescription = sexLabel,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = sexLabel,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            color = Color.White,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.5.sp
+                        )
+                    )
+                }
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = statusColor,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier
+                        .background(statusBg, shape = RoundedCornerShape(4.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Arete / Folio: ${animal.folioInterno}",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = BaappHighContrastText
+                    )
+                )
+                Text(
+                    text = "Raza: ${animal.breed} · Color: ${animal.color}",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Medium,
+                        color = BaappHighContrastText
+                    )
+                )
+                Text(
+                    text = "$ageLabelPrefix: ${dynamicAge?.formatSpanish() ?: "Fecha inválida"}",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = sexHeaderBg
+                    )
+                )
+                Text(
+                    text = "Fecha de nacimiento: ${animal.birthDateIso}",
+                    style = MaterialTheme.typography.bodySmall.copy(color = BaappHighContrastText)
+                )
+                Text(
+                    text = "Fecha de destete: ${animal.weaningDateIso ?: "Pendiente / Sin registro"}",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        color = BaappHighContrastText
+                    )
+                )
+                Text(
+                    text = "Etapa: ${lifeStageText(animal.lifeStage)} · Estado rep.: ${reproductiveText(animal.reproductiveStatus)}",
+                    style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                )
+                if (!animal.siniigaChip.isNullOrBlank()) {
+                    Text(
+                        text = "Chip SINIIGA: ${animal.siniigaChip}",
+                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                    )
+                }
+                if (!animal.registroUno.isNullOrBlank() || !animal.adn.isNullOrBlank()) {
+                    Text(
+                        text = listOfNotNull(
+                            animal.registroUno?.let { "UNO: $it" },
+                            animal.adn?.let { "ADN: $it" }
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                    )
+                }
+                if (!animal.criadorName.isNullOrBlank()) {
+                    Text(
+                        text = "Criador / Origen: ${animal.criadorName}",
+                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                    )
+                }
+                if (animal.status == AnimalStatus.DECEASED) {
+                    val mortalityInfo = listOfNotNull(
+                        animal.mortalityDateIso?.let { "Fecha: $it" },
+                        animal.mortalityCause?.let { "Causa: $it" }
+                    ).joinToString(" · ")
+                    if (mortalityInfo.isNotBlank()) {
+                        Text(
+                            text = "Baja por fallecimiento ($mortalityInfo)",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = Color(0xFFB71C1C),
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnimalPhotoCard(
+    folioInterno: String,
+    localPhotoPath: String?,
+    photoS3Key: String?
+) {
+    var bitmap by remember(localPhotoPath, photoS3Key) { mutableStateOf<ImageBitmap?>(null) }
+    var isLoadingPhoto by remember(localPhotoPath, photoS3Key) { mutableStateOf(false) }
+    var photoStatusMessage by remember(localPhotoPath, photoS3Key) { mutableStateOf<String?>(null) }
+
+    val hasPresignedUrl = !photoS3Key.isNullOrBlank() &&
+        (photoS3Key.startsWith("https://", ignoreCase = true) || photoS3Key.startsWith("http://", ignoreCase = true))
+
+    LaunchedEffect(localPhotoPath, photoS3Key) {
+        bitmap = null
+        photoStatusMessage = null
+        val localFile = localPhotoPath?.let { File(it) }
+        if (localFile != null && localFile.exists()) {
+            isLoadingPhoto = true
+            try {
+                val decoded = withContext(Dispatchers.IO) {
+                    decodeSampledBitmapFromBytes(localFile.readBytes())
+                }
+                if (decoded != null) {
+                    bitmap = decoded.asImageBitmap()
+                } else {
+                    photoStatusMessage = "No se pudo decodificar la fotografía local."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                photoStatusMessage = "Error al leer fotografía local."
+            } finally {
+                isLoadingPhoto = false
+            }
+        } else if (hasPresignedUrl) {
+            isLoadingPhoto = true
+            try {
+                val decoded = withContext(Dispatchers.IO) {
+                    loadBoundedBitmapFromUrl(photoS3Key!!, MAX_REMOTE_PHOTO_BYTES)
+                }
+                if (decoded != null) {
+                    bitmap = decoded.asImageBitmap()
+                } else {
+                    photoStatusMessage = "No se pudo cargar la fotografía remota."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                photoStatusMessage = "Fotografía en S3 no disponible sin conexión."
+            } finally {
+                isLoadingPhoto = false
+            }
+        } else if (!photoS3Key.isNullOrBlank()) {
+            photoStatusMessage = "Fotografía sincronizada ($photoS3Key) · Pendiente de URL pre-firmada."
+        } else {
+            photoStatusMessage = "Sin fotografía registrada."
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -207,84 +447,92 @@ private fun AnimalSummaryCard(animal: Animal) {
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = sexLabel,
-                    style = MaterialTheme.typography.labelSmall.copy(color = sexColor, fontWeight = FontWeight.Bold),
-                    modifier = Modifier
-                        .background(sexBg, shape = RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.labelSmall.copy(color = statusColor, fontWeight = FontWeight.Bold),
-                    modifier = Modifier
-                        .background(statusBg, shape = RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                )
-            }
-
             Text(
-                text = "Arete / Folio: ${animal.folioInterno}",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-            )
-            Text(
-                text = "Raza: ${animal.breed} · Color: ${animal.color}",
-                style = MaterialTheme.typography.bodyMedium.copy(color = Color.DarkGray)
-            )
-            Text(
-                text = "Nacimiento: ${animal.birthDateIso}" +
-                    (animal.weaningDateIso?.let { " · Destete: $it" } ?: ""),
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-            )
-            Text(
-                text = "Etapa: ${lifeStageText(animal.lifeStage)} · Estado rep.: ${reproductiveText(animal.reproductiveStatus)}",
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-            )
-            if (!animal.siniigaChip.isNullOrBlank()) {
-                Text(
-                    text = "Chip SINIIGA: ${animal.siniigaChip}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                text = "Fotografía del Ejemplar",
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = BaappHighContrastText
                 )
-            }
-            if (!animal.registroUno.isNullOrBlank() || !animal.adn.isNullOrBlank()) {
-                Text(
-                    text = listOfNotNull(
-                        animal.registroUno?.let { "UNO: $it" },
-                        animal.adn?.let { "ADN: $it" }
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-                )
-            }
-            if (!animal.criadorName.isNullOrBlank()) {
-                Text(
-                    text = "Criador / Origen: ${animal.criadorName}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-                )
-            }
-            if (animal.status == AnimalStatus.DECEASED) {
-                val mortalityInfo = listOfNotNull(
-                    animal.mortalityDateIso?.let { "Fecha: $it" },
-                    animal.mortalityCause?.let { "Causa: $it" }
-                ).joinToString(" · ")
-                if (mortalityInfo.isNotBlank()) {
+            )
+            when {
+                isLoadingPhoto -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = BaappPrimaryGreen)
+                    }
+                }
+                bitmap != null -> {
+                    Image(
+                        bitmap = bitmap!!,
+                        contentDescription = "Fotografía de $folioInterno",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                    )
+                }
+                else -> {
                     Text(
-                        text = "Baja por fallecimiento ($mortalityInfo)",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = Color(0xFFB71C1C),
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        text = photoStatusMessage ?: "Sin fotografía registrada.",
+                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF424242))
                     )
                 }
             }
         }
     }
+}
+
+private fun loadBoundedBitmapFromUrl(urlString: String, maxBytes: Int): Bitmap? {
+    val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 5000
+        readTimeout = 8000
+        instanceFollowRedirects = true
+    }
+    return try {
+        connection.inputStream.use { stream ->
+            val buffer = ByteArray(8 * 1024)
+            val output = ByteArrayOutputStream()
+            var total = 0
+            while (true) {
+                val read = stream.read(buffer)
+                if (read == -1) break
+                total += read
+                if (total > maxBytes) {
+                    throw IllegalStateException("Remote image exceeds max size")
+                }
+                output.write(buffer, 0, read)
+            }
+            decodeSampledBitmapFromBytes(output.toByteArray())
+        }
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun decodeSampledBitmapFromBytes(bytes: ByteArray): Bitmap? {
+    if (bytes.isEmpty()) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    var sampleSize = 1
+    val maxDim = 1024
+    val largest = maxOf(bounds.outWidth, bounds.outHeight)
+    while (largest / sampleSize > maxDim) {
+        sampleSize *= 2
+    }
+    val decodeOpts = BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+        inPreferredConfig = Bitmap.Config.RGB_565
+    }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts)
 }
 
 @Composable

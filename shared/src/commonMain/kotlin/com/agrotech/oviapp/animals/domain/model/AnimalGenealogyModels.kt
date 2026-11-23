@@ -24,5 +24,6 @@ data class AnimalDetailWithGenealogy(
     val animal: Animal,
     val dam: Animal?,
     val sire: Animal?,
-    val offspring: List<OffspringSummary>
+    val offspring: List<OffspringSummary>,
+    val localPhotoPath: String? = null
 )

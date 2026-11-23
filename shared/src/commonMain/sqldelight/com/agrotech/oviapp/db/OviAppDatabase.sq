@@ -101,6 +101,14 @@ SELECT * FROM pending_sync_events
 WHERE sync_status = 'PENDING'
 ORDER BY occurred_at ASC;
 
+selectLatestLocalPhotoByAnimalId:
+SELECT local_photo_path FROM pending_sync_events
+WHERE entity_type = 'ANIMAL'
+  AND local_photo_path IS NOT NULL
+  AND payload_json LIKE ('%"id":"' || :animalId || '"%')
+ORDER BY occurred_at DESC
+LIMIT 1;
+
 markSyncEventCompleted:
 UPDATE pending_sync_events
 SET sync_status = 'SYNCED'
