@@ -67,7 +67,10 @@ CREATE TABLE pending_sync_events (
     occurred_at TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     local_photo_path TEXT,
-    sync_status TEXT NOT NULL DEFAULT 'PENDING'
+    sync_status TEXT NOT NULL DEFAULT 'PENDING',
+    -- Orden de escritura (FIFO). occurred_at tiene precisión de milisegundo y depende del reloj del
+    -- celular, y mutation_id es UUIDv7 con bits aleatorios: ninguno de los dos garantiza el orden causal.
+    sequence INTEGER NOT NULL DEFAULT 0
 );
 
 -- Performance Indexes
@@ -86,11 +89,31 @@ CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
 CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
 
+CREATE INDEX idx_pending_sync_events_status_sequence ON pending_sync_events (sync_status, sequence);
+-- MAX(sequence) en cada inserción: con sequence a la izquierda SQLite lo resuelve sin recorrer el historial.
+CREATE INDEX idx_pending_sync_events_sequence ON pending_sync_events (sequence);
+
 -- Queries: sync
+insertSyncEvent:
+INSERT INTO pending_sync_events (
+    mutation_id, entity_type, operation, occurred_at, payload_json, local_photo_path, sync_status, sequence
+) VALUES (
+    ?, ?, ?, ?, ?, ?, 'PENDING',
+    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events)
+);
+
 selectPendingSyncEvents:
 SELECT * FROM pending_sync_events
 WHERE sync_status = 'PENDING'
-ORDER BY occurred_at ASC;
+ORDER BY sequence ASC;
+
+countPendingSyncEvents:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status = 'PENDING';
+
+-- Filas cambiadas por el último INSERT/UPDATE de esta conexión (para writeAndEnqueueIfChanged).
+changedRows:
+SELECT changes();
 
 markSyncEventCompleted:
 UPDATE pending_sync_events
