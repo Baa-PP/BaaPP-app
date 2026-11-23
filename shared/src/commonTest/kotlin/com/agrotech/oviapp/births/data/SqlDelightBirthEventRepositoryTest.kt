@@ -186,6 +186,39 @@ class SqlDelightBirthEventRepositoryTest {
         assertIs<BirthSaveResult.ValidationError>(missingFileRes)
     }
 
+    @Test
+    fun testSaveBirthEventIsIdempotentByDraftKeyAcrossRepeatedCalls() = runTest {
+        val damId = insertAdult("ranch-1", "H-300", Sex.FEMALE)
+        val firstDraft = BirthEventDraft(
+            ranchId = "ranch-1",
+            damId = damId,
+            birthDateIso = "2026-11-22",
+            stillborns = 0,
+            liveOffspring = listOf(LiveOffspringDraft("CRIA-300", Sex.FEMALE, "Blanco", "3.2")),
+            localPhotoPath = "/tmp/birth_300.jpg"
+        )
+
+        val firstRes = repository.saveBirthEventOffline(firstDraft, "2026-11-22", draftKey = "draft-key-1")
+        assertIs<BirthSaveResult.Success>(firstRes)
+
+        // Repeating the same draftKey (even with a different folio) must be rejected atomically
+        val repeatRes = repository.saveBirthEventOffline(
+            firstDraft.copy(liveOffspring = listOf(LiveOffspringDraft("CRIA-300-DUP", Sex.FEMALE, "Blanco", "3.2"))),
+            "2026-11-22",
+            draftKey = "draft-key-1"
+        )
+        assertIs<BirthSaveResult.ValidationError>(repeatRes)
+        assertEquals(null, database.oviAppDatabaseQueries.selectAnimalByFolio("ranch-1", "CRIA-300-DUP").executeAsOneOrNull())
+
+        // A different draftKey saves normally
+        val secondRes = repository.saveBirthEventOffline(
+            firstDraft.copy(liveOffspring = listOf(LiveOffspringDraft("CRIA-301", Sex.MALE, "Negro", "3.5"))),
+            "2026-11-22",
+            draftKey = "draft-key-2"
+        )
+        assertIs<BirthSaveResult.Success>(secondRes)
+    }
+
     private fun insertAdult(ranchId: String, folio: String, sex: Sex): String {
         val id = UuidV7.generate()
         database.oviAppDatabaseQueries.insertAnimal(
