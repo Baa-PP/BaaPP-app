@@ -78,6 +78,29 @@ class BirthAntiFraudPolicyTest {
     }
 
     @Test
+    fun testUnpaddedDatesRejectedForBirthAndReferenceDates() {
+        val unpaddedBirth = BirthAntiFraudPolicy.evaluate(
+            birthDateIso = "2026-1-5",
+            todayDateIso = "2026-01-10",
+            role = UserRole.OWNER
+        )
+        assertEquals(
+            BirthAntiFraudPolicy.DenialReason.INVALID_DATE,
+            assertIs<BirthAntiFraudPolicy.ValidationResult.Denied>(unpaddedBirth).reason
+        )
+
+        val unpaddedToday = BirthAntiFraudPolicy.evaluate(
+            birthDateIso = "2026-01-05",
+            todayDateIso = "2026-1-10",
+            role = UserRole.OWNER
+        )
+        assertEquals(
+            BirthAntiFraudPolicy.DenialReason.INVALID_DATE,
+            assertIs<BirthAntiFraudPolicy.ValidationResult.Denied>(unpaddedToday).reason
+        )
+    }
+
+    @Test
     fun testSessionPermissionsAndVetTechnicianAuditedBypass() {
         val today = "2026-11-22"
         val vetSession = AuthSession(

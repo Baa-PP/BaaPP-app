@@ -95,12 +95,13 @@ object BirthAntiFraudPolicy {
         }
     }
 
+    private val isoDateRegex = Regex("^(\\d{4})-(\\d{2})-(\\d{2})$")
+
     private fun parseIsoToEpochDay(raw: String): Long? {
-        val parts = raw.trim().split("-")
-        if (parts.size != 3) return null
-        val year = parts[0].toIntOrNull() ?: return null
-        val month = parts[1].toIntOrNull() ?: return null
-        val day = parts[2].toIntOrNull() ?: return null
+        val match = isoDateRegex.matchEntire(raw.trim()) ?: return null
+        val year = match.groupValues[1].toIntOrNull() ?: return null
+        val month = match.groupValues[2].toIntOrNull() ?: return null
+        val day = match.groupValues[3].toIntOrNull() ?: return null
         if (year !in 1900..9999 || month !in 1..12) return null
         if (day !in 1..daysInMonth(year, month)) return null
         return toEpochDay(year, month, day)
