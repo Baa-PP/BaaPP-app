@@ -277,3 +277,16 @@ INSERT OR REPLACE INTO local_weight_measurements (
     ?, ?, ?,
     ?, ?
 );
+
+-- APP-16: crías sin destetar para la lista de destetes (usa idx_local_animals_weaning_pending).
+selectUnweanedAnimals:
+SELECT id, folio_interno, sex, birth_date
+FROM local_animals
+WHERE ranch_id = :ranchId
+  AND status = 'ACTIVE'
+  -- Solo crías: un adulto comprado sin fecha de destete no debe aparecer como destete pendiente.
+  AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+  AND weaning_date IS NULL
+  AND mortality_date IS NULL
+  AND birth_date <= :bornOnOrBefore
+ORDER BY birth_date, folio_interno;
