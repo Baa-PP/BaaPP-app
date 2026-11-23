@@ -118,6 +118,7 @@ fun InventoryScreen(
     var lambsList by remember { mutableStateOf<List<LambInventoryItem>>(emptyList()) }
 
     var isLoading by remember { mutableStateOf(false) }
+    var activeRequestGeneration by remember { mutableIntStateOf(0) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var initialRetryTrigger by remember { mutableIntStateOf(0) }
     var paginationRetryTrigger by remember { mutableIntStateOf(0) }
@@ -131,6 +132,7 @@ fun InventoryScreen(
 
     // Reload list when tab, search, or filters change (or initial load retry)
     LaunchedEffect(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, initialRetryTrigger) {
+        val requestGeneration = ++activeRequestGeneration
         isLoading = true
         loadError = null
         currentOffset = 0L
@@ -176,7 +178,9 @@ fun InventoryScreen(
         } catch (e: Exception) {
             loadError = e.message ?: "No se pudo cargar el inventario."
         } finally {
-            isLoading = false
+            if (activeRequestGeneration == requestGeneration) {
+                isLoading = false
+            }
         }
     }
 
@@ -191,6 +195,7 @@ fun InventoryScreen(
             nearBottom && canLoadMore && !isLoading && loadError == null
         }.distinctUntilChanged().collect { shouldLoadMore ->
             if (shouldLoadMore && canLoadMore && !isLoading && loadError == null) {
+                val requestGeneration = ++activeRequestGeneration
                 isLoading = true
                 loadError = null
                 val fetchOffset = currentOffset
@@ -243,7 +248,9 @@ fun InventoryScreen(
                 } catch (e: Exception) {
                     loadError = e.message ?: "Error al cargar más registros."
                 } finally {
-                    isLoading = false
+                    if (activeRequestGeneration == requestGeneration) {
+                        isLoading = false
+                    }
                 }
             }
         }

@@ -337,7 +337,7 @@ fun AppNavigation(
         val capabilities = session!!.uiCapabilities()
         when (val screen = currentScreen) {
             is AppScreen.Inventory -> {
-                if (!currentRanchId.isNullOrBlank()) {
+                if (!currentRanchId.isNullOrBlank() && capabilities.canReadInventory) {
                     InventoryScreen(
                         ranchId = currentRanchId,
                         inventoryRepository = inventoryRepository,
