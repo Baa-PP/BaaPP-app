@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
+import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.domain.AuthRepository
@@ -73,7 +74,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            MaterialTheme {
+            OviTheme {
                 Surface {
                     MainApp(
                         onInitRepository = {
