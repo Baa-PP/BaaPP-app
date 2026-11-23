@@ -1,0 +1,320 @@
+package com.agrotech.oviapp.auth
+
+import com.agrotech.oviapp.auth.data.AuthServerException
+import com.agrotech.oviapp.auth.data.AuthService
+import com.agrotech.oviapp.auth.data.KtorAuthService
+import com.agrotech.oviapp.auth.data.LoginResponse
+import com.agrotech.oviapp.auth.data.UserDto
+import com.agrotech.oviapp.auth.domain.AuthRepository
+import com.agrotech.oviapp.auth.domain.AuthSession
+import com.agrotech.oviapp.auth.domain.SessionStorage
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class FakeSessionStorage : SessionStorage {
+    private val lock = com.agrotech.oviapp.auth.domain.AuthLock()
+    private var currentSession: AuthSession? = null
+
+    override fun saveSession(session: AuthSession) = lock.withLock {
+        currentSession = session
+    }
+
+    override fun getSession(): AuthSession? = lock.withLock { currentSession }
+
+    override fun clearSession() = lock.withLock {
+        currentSession = null
+    }
+
+    override fun hasSession(): Boolean = lock.withLock { currentSession != null }
+
+    override fun updateSessionIfMatches(
+        expectedSessionId: String,
+        expectedRefreshToken: String?,
+        transform: (AuthSession) -> AuthSession
+    ): Boolean = lock.withLock {
+        val current = currentSession ?: return@withLock false
+        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+            return@withLock false
+        }
+        currentSession = transform(current)
+        true
+    }
+
+    override fun clearSessionIfMatches(
+        expectedSessionId: String,
+        expectedRefreshToken: String?
+    ): Boolean = lock.withLock {
+        val current = currentSession ?: return@withLock false
+        if (current.sessionId != expectedSessionId || current.refreshToken != expectedRefreshToken) {
+            return@withLock false
+        }
+        currentSession = null
+        true
+    }
+}
+
+class FakeAuthService(
+    var mockSession: AuthSession? = null,
+    var shouldFail: Boolean = false,
+    var failureException: Exception = Exception("Network error")
+) : AuthService {
+    var wasClosed = false
+
+    override suspend fun login(username: String, password: String): AuthSession {
+        if (shouldFail) throw failureException
+        return mockSession ?: AuthSession(
+            accessToken = "mock-jwt-token",
+            refreshToken = "mock-refresh-token",
+            username = username,
+            role = "OWNER",
+            ranchId = "ranch-uuid-1",
+            permissions = mapOf("capture" to true)
+        )
+    }
+
+    override fun close() {
+        wasClosed = true
+    }
+}
+
+class AuthRepositoryTest {
+
+    private fun createMockHttpClient(
+        responseJson: String,
+        status: HttpStatusCode = HttpStatusCode.OK
+    ): HttpClient {
+        return HttpClient(MockEngine { _ ->
+            respond(
+                content = responseJson,
+                status = status,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }) {
+            install(ContentNegotiation) {
+                json(Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                    coerceInputValues = true
+                })
+            }
+        }
+    }
+
+    @Test
+    fun testLoginSuccessSavesSessionInStorage() = runTest {
+        val storage = FakeSessionStorage()
+        val service = FakeAuthService()
+        val repository = AuthRepository(service, storage)
+
+        assertFalse(repository.hasValidSession())
+        assertNull(repository.getCachedSession())
+
+        val result = repository.login("don_chente", "secreto123")
+        assertTrue(result.isSuccess)
+
+        val session = result.getOrNull()
+        assertNotNull(session)
+        assertEquals("don_chente", session.username)
+        assertEquals("mock-jwt-token", session.accessToken)
+        assertTrue(repository.hasValidSession())
+        assertEquals(session, repository.getCachedSession())
+    }
+
+    @Test
+    fun testOfflineSessionAvailableWithoutNetwork() {
+        val storage = FakeSessionStorage()
+        val offlineSession = AuthSession(
+            accessToken = "saved-offline-token",
+            refreshToken = "saved-offline-refresh",
+            username = "vaquero1",
+            role = "WORKER_BRANCH",
+            ranchId = "rancho-san-pedro",
+            permissions = mapOf("capture" to true, "read_inventory" to true)
+        )
+        storage.saveSession(offlineSession)
+
+        // Offline: AuthService will throw exception if called, but cached session works
+        val offlineFailingService = FakeAuthService(shouldFail = true)
+        val repository = AuthRepository(offlineFailingService, storage)
+
+        assertTrue(repository.hasValidSession())
+        val cached = repository.getCachedSession()
+        assertNotNull(cached)
+        assertEquals("vaquero1", cached.username)
+        assertEquals("WORKER_BRANCH", cached.role)
+        assertTrue(cached.isWorkerBranch)
+        assertTrue(cached.hasPermission("capture"))
+    }
+
+    @Test
+    fun testLogoutClearsSessionFromStorage() = runTest {
+        val storage = FakeSessionStorage()
+        val service = FakeAuthService()
+        val repository = AuthRepository(service, storage)
+
+        repository.login("admin", "pass")
+        assertTrue(repository.hasValidSession())
+
+        repository.logout()
+        assertFalse(repository.hasValidSession())
+        assertNull(repository.getCachedSession())
+    }
+
+    @Test
+    fun testHttpsEnforcementRejectsHttpUrls() {
+        assertFailsWith<SecurityException> {
+            KtorAuthService.enforceHttps("http://insecure-api.agrotech.com/api/v1")
+        }
+        // Valid HTTPS URL does not throw
+        KtorAuthService.enforceHttps("https://du6aq4me7fp0q.cloudfront.net/api/v1")
+    }
+
+    @Test
+    fun testLoginResponseParsing() {
+        val resp = LoginResponse(
+            accessToken = "jwt-abc",
+            refreshToken = "refresh-xyz",
+            role = "ROLE_OWNER",
+            ranchId = "ranch-123",
+            user = UserDto(username = "propietario")
+        )
+        assertEquals("jwt-abc", resp.resolveAccessToken())
+        assertEquals("refresh-xyz", resp.resolveRefreshToken())
+        assertEquals("OWNER", resp.resolveRole())
+        assertEquals("ranch-123", resp.resolveRanchId())
+        assertEquals("propietario", resp.resolveUsername("fallback"))
+    }
+
+    @Test
+    fun testUnrecognizedOrMissingRoleResolvesToWorkerBranchAndNeverOwner() {
+        // Missing role
+        val missingRole = LoginResponse(role = null, user = UserDto(role = null))
+        assertEquals("WORKER_BRANCH", missingRole.resolveRole())
+
+        // Empty/whitespace role
+        val emptyRole = LoginResponse(role = "   ")
+        assertEquals("WORKER_BRANCH", emptyRole.resolveRole())
+
+        // Unrecognized role
+        val unknownRole = LoginResponse(role = "ROLE_SUPER_USER_UNKNOWN")
+        assertEquals("WORKER_BRANCH", unknownRole.resolveRole())
+
+        // Leading/trailing whitespace around ROLE_ prefix normalizes consistently
+        val paddedOwner = LoginResponse(role = " role_owner ")
+        assertEquals("OWNER", paddedOwner.resolveRole())
+
+        // Non-owner session requires explicit permission entries
+        val session = AuthSession(
+            accessToken = "tok",
+            username = "pepe",
+            role = missingRole.resolveRole(),
+            permissions = mapOf("capture" to true, "delete" to false)
+        )
+        assertFalse(session.isOwner)
+        assertTrue(session.isWorkerBranch)
+        assertTrue(session.hasPermission("capture"))
+        assertFalse(session.hasPermission("delete"))
+        assertFalse(session.hasPermission("unknown_action"))
+    }
+
+    @Test
+    fun testCancellationExceptionIsRethrown() = runTest {
+        val storage = FakeSessionStorage()
+        val service = FakeAuthService(
+            shouldFail = true,
+            failureException = CancellationException("Coroutines job cancelled")
+        )
+        val repository = AuthRepository(service, storage)
+
+        assertFailsWith<CancellationException> {
+            repository.login("user", "pass")
+        }
+    }
+
+    @Test
+    fun testRepositoryCloseClosesAuthService() {
+        val storage = FakeSessionStorage()
+        val service = FakeAuthService()
+        val repository = AuthRepository(service, storage)
+
+        assertFalse(service.wasClosed)
+        repository.close()
+        assertTrue(service.wasClosed)
+    }
+
+    @Test
+    fun testLoginSupersededByLogoutDoesNotSaveStaleSession() = runTest {
+        val storage = FakeSessionStorage()
+        val loginStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val allowLoginComplete = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        val suspendingService = object : AuthService {
+            override suspend fun login(username: String, password: String): AuthSession {
+                loginStarted.complete(Unit)
+                allowLoginComplete.await()
+                return AuthSession(
+                    accessToken = "stale-jwt",
+                    username = username,
+                    role = "OWNER",
+                    sessionId = "sess-stale"
+                )
+            }
+            override fun close() {}
+        }
+
+        val repository = AuthRepository(suspendingService, storage)
+        val loginJob = async { repository.login("owner", "secret") }
+        loginStarted.await()
+
+        repository.logout()
+        allowLoginComplete.complete(Unit)
+
+        val result = loginJob.await()
+        assertTrue(result.isFailure)
+        assertNull(storage.getSession())
+    }
+
+    @Test
+    fun testKtorAuthServiceLoginTokenRejection() = runTest {
+        // 1. Empty token response produces AuthServerException
+        val emptyClient = createMockHttpClient("""{"accessToken":""}""")
+        val emptyService = KtorAuthService(baseUrl = KtorAuthService.DEFAULT_BASE_URL, client = emptyClient)
+        assertFailsWith<AuthServerException> {
+            emptyService.login("user", "pass")
+        }
+
+        // 2. Whitespace-only token response produces AuthServerException
+        val whitespaceClient = createMockHttpClient("""{"accessToken":"   "}""")
+        val whitespaceService = KtorAuthService(baseUrl = KtorAuthService.DEFAULT_BASE_URL, client = whitespaceClient)
+        assertFailsWith<AuthServerException> {
+            whitespaceService.login("user", "pass")
+        }
+
+        // 3. Valid nonblank token response is accepted
+        val validClient = createMockHttpClient(
+            """{"accessToken":"valid-jwt-token","role":"OWNER","ranchId":"ranch-1"}"""
+        )
+        val validService = KtorAuthService(baseUrl = KtorAuthService.DEFAULT_BASE_URL, client = validClient)
+        val session = validService.login("user", "pass")
+        assertEquals("valid-jwt-token", session.accessToken)
+        assertEquals("OWNER", session.role)
+        assertEquals("ranch-1", session.ranchId)
+    }
+}
