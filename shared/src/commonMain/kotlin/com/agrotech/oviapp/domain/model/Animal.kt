@@ -8,7 +8,35 @@ enum class ReproductiveStatus { EMPTY, PREGNANT, LACTATING, STUD_RAM }
 enum class AnimalStatus { ACTIVE, SOLD, DECEASED }
 enum class ParturitionType { SIMPLE, TWIN, TRIPLET, QUADRUPLET, QUINTUPLET }
 enum class ConceptionMethod { MN, IA, TE }
+enum class EntryReason { BIRTH, PURCHASE, REENTRY, TRANSFER, OTHER }
 enum class Role { OWNER, WORKER_BRANCH, VET_TECHNICIAN, ASSOCIATION_SUPERUSER }
+
+/**
+ * Orthogonal domain catalogs for sheep registration and field capture (RF-AND-02).
+ * Excluded legacy fields (prefix position, letter position, classification, family, wool/milk)
+ * are intentionally omitted.
+ */
+object AnimalCatalogs {
+    val BREEDS: List<String> = listOf(
+        "Dorper",
+        "Pelifolk",
+        "Pelibuey",
+        "Katahdin",
+        "Blackbelly",
+        "Suffolk",
+        "Charollais",
+        "Hampshire",
+        "Dorset",
+        "Rambouillet",
+        "East Friesian",
+        "Criollo",
+        "Cruza / Comercial"
+    )
+
+    val ENTRY_REASONS: List<EntryReason> = EntryReason.entries
+    val PARTURITION_TYPES: List<ParturitionType> = ParturitionType.entries
+    val CONCEPTION_METHODS: List<ConceptionMethod> = ConceptionMethod.entries
+}
 
 @Serializable
 data class Animal(
