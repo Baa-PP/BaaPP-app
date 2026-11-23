@@ -30,7 +30,7 @@ class NoPhysicalDeleteTest {
         driver.execute(null, "CREATE TABLE local_animals (id TEXT NOT NULL PRIMARY KEY, mortality_cause TEXT)", 0)
         driver.execute(null, "INSERT INTO local_animals (id) VALUES ('a1')", 0)
 
-        OviAppDatabase.Schema.migrate(driver, oldVersion = 3, newVersion = OviAppDatabase.Schema.version)
+        OviAppDatabase.Schema.migrate(driver, oldVersion = 3, newVersion = 4)
         driver.execute(null, "UPDATE local_animals SET life_stage_at_death = 'ADULT' WHERE id = 'a1'", 0)
 
         val stage = driver.executeQuery(
@@ -39,7 +39,7 @@ class NoPhysicalDeleteTest {
             mapper = { cursor -> app.cash.sqldelight.db.QueryResult.Value(if (cursor.next().value) cursor.getString(0) else null) },
             parameters = 0,
         ).value
-        assertEquals(4, OviAppDatabase.Schema.version)
+        assertTrue(OviAppDatabase.Schema.version >= 4)
         assertEquals("ADULT", stage)
         driver.close()
     }
