@@ -8,6 +8,8 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -65,9 +67,11 @@ class DeviceTokenRegistrar(
     }
 
     /** El token es por usuario: al cerrar sesión, el siguiente usuario debe registrarlo de nuevo. */
-    fun onLogout() {
-        store.sessionGeneration += 1
-        store.registeredToken = null
+    suspend fun onLogout() {
+        sessionLock.withLock {
+            store.sessionGeneration += 1
+            store.registeredToken = null
+        }
     }
 
     suspend fun registerIfNeeded(isLoggedIn: Boolean): DeviceTokenRegistration {
@@ -79,14 +83,25 @@ class DeviceTokenRegistrar(
         return try {
             api.register(DeviceTokenRequest(token = token))
             // Si hubo logout mientras viajaba la petición, ese registro era del usuario anterior:
-            // no se marca, para que el siguiente usuario sí registre el celular.
-            if (store.sessionGeneration == generation) store.registeredToken = token
+            // no se marca, para que el siguiente usuario sí registre el celular. La revisión y la
+            // escritura van bajo el mismo candado que onLogout, así un logout no puede colarse entre ellas.
+            sessionLock.withLock {
+                if (store.sessionGeneration == generation) store.registeredToken = token
+            }
             DeviceTokenRegistration.Registered
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
             DeviceTokenRegistration.RetryLater(failure)
         }
+    }
+
+    private companion object {
+        /**
+         * Compartido por todas las instancias: la app crea un registrador por llamada
+         * (`Notifications.registrar`) y todos escriben el mismo store desde hilos distintos.
+         */
+        val sessionLock = Mutex()
     }
 }
 

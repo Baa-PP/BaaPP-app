@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import app.cash.sqldelight.db.SqlDriver
@@ -92,10 +93,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        viewModel = ViewModelProvider(
-            this,
-            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-        )[MainAppViewModel::class.java]
+        // La fábrica por defecto de ComponentActivity entrega Application y SavedStateHandle al ViewModel.
+        viewModel = ViewModelProvider(this)[MainAppViewModel::class.java]
 
         // Solo en el primer arranque: al recrear la Activity (rotación) el aviso ya se atendió.
         if (savedInstanceState == null) {
@@ -123,7 +122,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-class MainAppViewModel(application: Application) : AndroidViewModel(application) {
+class MainAppViewModel(
+    application: Application,
+    private val savedState: SavedStateHandle,
+) : AndroidViewModel(application) {
     var state by mutableStateOf<InitialState>(InitialState.Loading)
         private set
     var currentSession by mutableStateOf<AuthSession?>(null)
@@ -135,8 +137,11 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
     var birthSaveState by mutableStateOf<BirthSaveUiState>(BirthSaveUiState.Idle)
         private set
 
-    /** Aviso de destete tocado (APP-17) que la navegación debe abrir cuando haya sesión. */
-    var pendingWeaningAlert by mutableStateOf<WeaningAlert?>(null)
+    /**
+     * Aviso de destete tocado (APP-17) que la navegación debe abrir cuando haya sesión. Se guarda también en
+     * el SavedStateHandle: si Android mata el proceso antes del login, el aviso sigue pendiente al volver.
+     */
+    var pendingWeaningAlert by mutableStateOf(restoreWeaningAlert())
         private set
 
     private val lifecycleLock = Any()
@@ -164,19 +169,31 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
 
     fun openWeaningAlert(alert: WeaningAlert) {
         pendingWeaningAlert = alert
+        savedState[WEANING_ALERT_KEY] = HashMap(alert.toData())
     }
 
+    /** Ya atendido: se borra también del estado guardado para que no se vuelva a abrir. */
     fun weaningAlertHandled() {
         pendingWeaningAlert = null
+        savedState.remove<HashMap<String, String>>(WEANING_ALERT_KEY)
     }
+
+    private fun restoreWeaningAlert(): WeaningAlert? =
+        savedState.get<HashMap<String, String>>(WEANING_ALERT_KEY)?.let { WeaningAlert.fromData(it) }
 
     /** Al entrar se registra el celular; al salir el siguiente usuario debe registrarlo de nuevo. */
     private fun onSessionChanged(previous: AuthSession?, current: AuthSession?) {
         val context = getApplication<Application>()
-        if (previous != null && (current == null || current.username != previous.username)) {
-            Notifications.registrar(context).onLogout()
+        val userLeft = previous != null && (current == null || current.username != previous.username)
+        if (!userLeft) {
+            if (current != null) DeviceTokenWorker.enqueue(context)
+            return
         }
-        if (current != null) DeviceTokenWorker.enqueue(context)
+        // Primero se olvida el registro del usuario anterior y después se registra el nuevo, en ese orden.
+        viewModelScope.launch {
+            Notifications.registrar(context).onLogout()
+            if (current != null) DeviceTokenWorker.enqueue(context)
+        }
     }
 
     fun saveAnimal(draftKey: String, formState: AnimalFormState) {
@@ -400,6 +417,8 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
     }
 }
 
+private const val WEANING_ALERT_KEY = "pending_weaning_alert"
+
 sealed interface AnimalSaveUiState {
     data object Idle : AnimalSaveUiState
     data class Saving(val draftKey: String) : AnimalSaveUiState
@@ -609,6 +628,8 @@ fun AppNavigation(
         val alert = weaningAlert ?: return@LaunchedEffect
         val activeSession = session ?: return@LaunchedEffect
         if (alert.ranchId == activeSession.ranchId) {
+            // Como al entrar desde el inventario: sin historial previo, "atrás" no repite el mismo cordero.
+            detailBackStack = emptyList()
             currentScreen = AppScreen.AnimalDetail(alert.animalId)
         }
         onWeaningAlertHandled()

@@ -11,7 +11,7 @@ import io.ktor.client.engine.okhttp.OkHttp
 
 /** Composición manual de las piezas de notificaciones hasta que el proyecto adopte un contenedor DI. */
 object Notifications {
-    /** APP-02 lo reemplaza por la sesión real y llama a registrar(...).onLogout() al salir. */
+    /** MainAppViewModel lo reemplaza por la sesión real y llama a registrar(...).onLogout() al salir. */
     @Volatile
     var session: SessionProvider = NoSessionYet
 
