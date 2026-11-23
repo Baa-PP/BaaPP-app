@@ -67,13 +67,22 @@ class LocalPhotoRetentionTest {
         val retention = LocalPhotoRetentionManager(database)
         val tempDir = Files.createTempDirectory("baapp_photo_limit_test").toFile()
         try {
-            val oversized = CompressedPhoto(
+            val oversizedWithStaleMetadata = CompressedPhoto(
                 bytes = ByteArray(PhotoCompressionConfig.MAX_TARGET_BYTES + 1),
-                format = PhotoFormat.WEBP
+                format = PhotoFormat.WEBP,
+                sizeBytes = 1024
             )
             assertFailsWith<IllegalArgumentException> {
-                retention.persistPendingPhoto(tempDir.absolutePath, oversized, "oversized")
+                retention.persistPendingPhoto(tempDir.absolutePath, oversizedWithStaleMetadata, "oversized")
             }
+
+            val validWithStaleMetadata = CompressedPhoto(
+                bytes = ByteArray(160 * 1024),
+                format = PhotoFormat.JPEG,
+                sizeBytes = 1024
+            )
+            val stored = retention.persistPendingPhoto(tempDir.absolutePath, validWithStaleMetadata, "valid-stale")
+            assertEquals(160 * 1024, stored.sizeBytes)
         } finally {
             tempDir.deleteRecursively()
             driver.close()

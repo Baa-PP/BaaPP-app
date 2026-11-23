@@ -57,14 +57,15 @@ class LocalPhotoRetentionManager(
         compressed: CompressedPhoto,
         photoId: String = UuidV7.generate()
     ): StoredLocalPhoto {
-        require(compressed.sizeBytes <= PhotoCompressionConfig.MAX_TARGET_BYTES) {
+        val actualSizeBytes = compressed.bytes.size
+        require(actualSizeBytes <= PhotoCompressionConfig.MAX_TARGET_BYTES) {
             "La fotografía comprimida excede el límite de ${PhotoCompressionConfig.MAX_TARGET_BYTES / 1024} KB."
         }
         val fileName = "photo_${photoId}.${compressed.format.extension}"
         val path = LocalPhotoFileOps.writeAtomically(basePendingDirPath, fileName, compressed.bytes)
         return StoredLocalPhoto(
             localPhotoPath = path,
-            sizeBytes = compressed.sizeBytes,
+            sizeBytes = actualSizeBytes,
             format = compressed.format
         )
     }

@@ -1,6 +1,7 @@
 package com.agrotech.oviapp.android.photos
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -31,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,7 +81,7 @@ fun PhotoCaptureCard(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var isProcessing by remember { mutableStateOf(false) }
-    var pendingCameraFile by remember { mutableStateOf<File?>(null) }
+    var pendingCameraFilePath by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun processSourceUri(sourceUri: Uri, cleanupSourceFile: File? = null) {
         scope.launch {
@@ -121,8 +123,9 @@ fun PhotoCaptureCard(
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        val capturedFile = pendingCameraFile
-        pendingCameraFile = null
+        val savedPath = pendingCameraFilePath
+        pendingCameraFilePath = null
+        val capturedFile = savedPath?.let { File(it) }
         if (success && capturedFile != null && capturedFile.exists()) {
             val uri = Uri.fromFile(capturedFile)
             processSourceUri(uri, cleanupSourceFile = capturedFile)
@@ -133,8 +136,14 @@ fun PhotoCaptureCard(
 
     fun launchCameraCapture() {
         val (file, contentUri) = createCameraTempFileUri(context)
-        pendingCameraFile = file
-        cameraLauncher.launch(contentUri)
+        pendingCameraFilePath = file.absolutePath
+        try {
+            cameraLauncher.launch(contentUri)
+        } catch (e: ActivityNotFoundException) {
+            pendingCameraFilePath = null
+            file.delete()
+            onError("No se encontró una aplicación de cámara disponible. Puedes usar la opción Galería.")
+        }
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(

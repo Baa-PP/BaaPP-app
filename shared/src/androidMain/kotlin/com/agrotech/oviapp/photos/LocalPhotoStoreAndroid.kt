@@ -2,7 +2,10 @@ package com.agrotech.oviapp.photos
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.os.Build
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -25,16 +28,24 @@ actual object LocalPhotoCompressor {
             "El archivo seleccionado no es una imagen válida."
         }
 
-        // If the original image already fits within the 150-200 KB window, preserve it.
-        if (inputBytes.size in minBytes..maxBytes) {
+        val orientation = readExifOrientation(inputBytes)
+        val hasNormalOrientation = orientation == ExifInterface.ORIENTATION_NORMAL ||
+            orientation == ExifInterface.ORIENTATION_UNDEFINED
+
+        // Preserve unchanged bytes only when already within the target window, format matches, and no rotation/flip is needed.
+        if (inputBytes.size in minBytes..maxBytes &&
+            mimeMatchesFormat(bounds.outMimeType, format) &&
+            hasNormalOrientation
+        ) {
             return CompressedPhoto(bytes = inputBytes, format = format, sizeBytes = inputBytes.size)
         }
 
         val decodeOpts = BitmapFactory.Options().apply {
             inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, MAX_INITIAL_DIMENSION)
         }
-        var bitmap = BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, decodeOpts)
+        val decoded = BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, decodeOpts)
             ?: throw IllegalArgumentException("No se pudo decodificar la imagen seleccionada.")
+        var bitmap = applyExifOrientation(decoded, orientation)
 
         val compressFormat = resolveAndroidCompressFormat(format)
         try {
@@ -119,6 +130,47 @@ actual object LocalPhotoCompressor {
             h /= 2
         }
         return sample
+    }
+
+    private fun mimeMatchesFormat(mimeType: String?, format: PhotoFormat): Boolean =
+        when (format) {
+            PhotoFormat.JPEG -> mimeType.equals("image/jpeg", ignoreCase = true)
+            PhotoFormat.WEBP -> mimeType.equals("image/webp", ignoreCase = true)
+        }
+
+    private fun readExifOrientation(inputBytes: ByteArray): Int =
+        runCatching {
+            ByteArrayInputStream(inputBytes).use { stream ->
+                ExifInterface(stream).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }
+        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+    private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            else -> return bitmap
+        }
+        val transformed = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        if (transformed !== bitmap) {
+            bitmap.recycle()
+        }
+        return transformed
     }
 }
 
