@@ -3,6 +3,7 @@ package com.agrotech.oviapp.animals.data
 import com.agrotech.oviapp.animals.domain.model.ParentOption
 import com.agrotech.oviapp.animals.domain.repository.ParentSelectorRepository
 import com.agrotech.oviapp.db.OviAppDatabase
+import com.agrotech.oviapp.domain.model.LifeStage
 import com.agrotech.oviapp.domain.model.Sex
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -33,9 +34,13 @@ class SqlDelightParentSelectorRepository(
                 .selectAnimalsBySexPaged(ranchId, sex.name, pageSize, offset)
                 .executeAsList()
             batch.forEach { row ->
-                if (cleanQuery.isEmpty() ||
-                    row.folio_interno.contains(cleanQuery, ignoreCase = true) ||
-                    (row.siniiga_chip?.contains(cleanQuery, ignoreCase = true) == true)
+                val isEligibleStage = row.life_stage == LifeStage.ADULT.name ||
+                    (sex == Sex.FEMALE && row.life_stage == LifeStage.EWE_REPLACEMENT.name)
+                if (isEligibleStage && (
+                        cleanQuery.isEmpty() ||
+                            row.folio_interno.contains(cleanQuery, ignoreCase = true) ||
+                            (row.siniiga_chip?.contains(cleanQuery, ignoreCase = true) == true)
+                        )
                 ) {
                     results.add(
                         ParentOption(

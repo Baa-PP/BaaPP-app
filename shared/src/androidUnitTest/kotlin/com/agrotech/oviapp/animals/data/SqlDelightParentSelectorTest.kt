@@ -11,6 +11,7 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
 import kotlinx.coroutines.test.runTest
+import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,15 +19,21 @@ import kotlin.test.assertTrue
 
 class SqlDelightParentSelectorTest {
 
+    private lateinit var driver: JdbcSqliteDriver
     private lateinit var database: OviAppDatabase
     private lateinit var repository: SqlDelightParentSelectorRepository
 
     @BeforeTest
     fun setup() {
-        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
         repository = SqlDelightParentSelectorRepository(database)
+    }
+
+    @AfterTest
+    fun tearDown() {
+        driver.close()
     }
 
     @Test
@@ -44,6 +51,8 @@ class SqlDelightParentSelectorTest {
             siniigaChip = "484000999111"
         )
         insertAnimal(ranchA, "HEMBRA-A3-FALLECIDA", Sex.FEMALE, AnimalStatus.DECEASED)
+        insertAnimal(ranchA, "CRIA-HEMBRA-LACT", Sex.FEMALE, AnimalStatus.ACTIVE, lifeStage = LifeStage.LAMB_LACTATING)
+        insertAnimal(ranchA, "CRIA-MACHO-LACT", Sex.MALE, AnimalStatus.ACTIVE, lifeStage = LifeStage.LAMB_LACTATING)
         insertAnimal(ranchA, "SEMENTAL-A1", Sex.MALE, AnimalStatus.ACTIVE)
         insertAnimal(ranchB, "HEMBRA-B1", Sex.FEMALE, AnimalStatus.ACTIVE)
         insertAnimal(ranchB, "SEMENTAL-B1", Sex.MALE, AnimalStatus.ACTIVE)
@@ -75,7 +84,8 @@ class SqlDelightParentSelectorTest {
         folio: String,
         sex: Sex,
         status: AnimalStatus,
-        siniigaChip: String? = null
+        siniigaChip: String? = null,
+        lifeStage: LifeStage = LifeStage.ADULT
     ) {
         database.oviAppDatabaseQueries.insertAnimal(
             id = UuidV7.generate(),
@@ -101,7 +111,7 @@ class SqlDelightParentSelectorTest {
             birth_event_id = null,
             mortality_date = null,
             mortality_cause = null,
-            life_stage = LifeStage.ADULT.name,
+            life_stage = lifeStage.name,
             reproductive_status = ReproductiveStatus.EMPTY.name,
             status = status.name,
             updated_at = "2026-11-22T00:00:00Z"

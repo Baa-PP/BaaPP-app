@@ -12,6 +12,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,7 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.animals.domain.model.ParentOption
@@ -33,22 +33,31 @@ fun ParentSelectorsSection(
     dams: List<ParentOption>,
     sires: List<ParentOption>,
     onStateChange: (ParentSelectionState) -> Unit,
+    excludeAnimalId: String? = null,
     modifier: Modifier = Modifier
 ) {
     var damExpanded by remember { mutableStateOf(false) }
     var sireExpanded by remember { mutableStateOf(false) }
 
+    val selectableDams = remember(dams, excludeAnimalId) {
+        if (excludeAnimalId == null) dams else dams.filterNot { it.id == excludeAnimalId }
+    }
+    val selectableSires = remember(sires, excludeAnimalId) {
+        if (excludeAnimalId == null) sires else sires.filterNot { it.id == excludeAnimalId }
+    }
+
     val selectedDamLabel = dams.firstOrNull { it.id == state.damId }?.folioInterno
-        ?: state.damId
-        ?: "Ninguna / Madre externa"
+        ?: if (state.damId != null) "Madre registrada (no activa)" else "Ninguna / Madre externa"
     val selectedSireLabel = sires.firstOrNull { it.id == state.sireId }?.folioInterno
-        ?: state.sireId
-        ?: "Ninguno / Semental externo"
+        ?: if (state.sireId != null) "Semental registrado (no activo)" else "Ninguno / Semental externo"
 
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -70,7 +79,9 @@ fun ParentSelectorsSection(
                     readOnly = true,
                     label = { Text("Madre en Rebaño (Hembras)") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = damExpanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    modifier = Modifier
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
                 ExposedDropdownMenu(
@@ -84,11 +95,11 @@ fun ParentSelectorsSection(
                             damExpanded = false
                         }
                     )
-                    dams.forEach { dam ->
+                    selectableDams.forEach { dam ->
                         DropdownMenuItem(
                             text = { Text("${dam.folioInterno} (${dam.breed})") },
                             onClick = {
-                                onStateChange(state.copy(damId = dam.id))
+                                onStateChange(state.copy(damId = dam.id, externalDamFolio = ""))
                                 damExpanded = false
                             }
                         )
@@ -98,7 +109,14 @@ fun ParentSelectorsSection(
 
             OutlinedTextField(
                 value = state.externalDamFolio,
-                onValueChange = { onStateChange(state.copy(externalDamFolio = it)) },
+                onValueChange = { value ->
+                    onStateChange(
+                        state.copy(
+                            damId = if (value.isNotBlank()) null else state.damId,
+                            externalDamFolio = value
+                        )
+                    )
+                },
                 label = { Text("Folio Madre Externa (texto libre)") },
                 placeholder = { Text("Ej. MADRE-EXT-01") },
                 singleLine = true,
@@ -117,7 +135,9 @@ fun ParentSelectorsSection(
                     readOnly = true,
                     label = { Text("Semental en Rebaño (Machos)") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sireExpanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    modifier = Modifier
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
                 ExposedDropdownMenu(
@@ -131,11 +151,11 @@ fun ParentSelectorsSection(
                             sireExpanded = false
                         }
                     )
-                    sires.forEach { sire ->
+                    selectableSires.forEach { sire ->
                         DropdownMenuItem(
                             text = { Text("${sire.folioInterno} (${sire.breed})") },
                             onClick = {
-                                onStateChange(state.copy(sireId = sire.id))
+                                onStateChange(state.copy(sireId = sire.id, externalSireFolio = ""))
                                 sireExpanded = false
                             }
                         )
@@ -145,7 +165,14 @@ fun ParentSelectorsSection(
 
             OutlinedTextField(
                 value = state.externalSireFolio,
-                onValueChange = { onStateChange(state.copy(externalSireFolio = it)) },
+                onValueChange = { value ->
+                    onStateChange(
+                        state.copy(
+                            sireId = if (value.isNotBlank()) null else state.sireId,
+                            externalSireFolio = value
+                        )
+                    )
+                },
                 label = { Text("Folio Semental Externo (texto libre)") },
                 placeholder = { Text("Ej. SEMENTAL-EXT-01") },
                 singleLine = true,
