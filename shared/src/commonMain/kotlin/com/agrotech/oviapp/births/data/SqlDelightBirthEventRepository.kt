@@ -32,7 +32,8 @@ class SqlDelightBirthEventRepository(
 
     override suspend fun saveBirthEventOffline(
         draft: BirthEventDraft,
-        todayDateIso: String
+        todayDateIso: String,
+        draftKey: String?
     ): BirthSaveResult = withContext(ioDispatcher) {
         val validationError = draft.validate(todayDateIso)
         if (validationError != null) {
@@ -52,9 +53,21 @@ class SqlDelightBirthEventRepository(
         val parturitionType = draft.deducedParturitionType()
         val cleanBirthDate = draft.birthDateIso.trim()
         val normalizedSireId = draft.sireId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedDraftKey = draftKey?.trim()?.takeIf { it.isNotEmpty() }
 
         try {
             database.transactionWithResult {
+                if (normalizedDraftKey != null) {
+                    val existingByKey = database.oviAppDatabaseQueries
+                        .selectBirthEventByDraftKey(normalizedDraftKey)
+                        .executeAsOneOrNull()
+                    if (existingByKey != null) {
+                        return@transactionWithResult BirthSaveResult.ValidationError(
+                            "Este evento de parto ya fue guardado."
+                        )
+                    }
+                }
+
                 val dam = database.oviAppDatabaseQueries
                     .selectAnimalById(draft.damId)
                     .executeAsOneOrNull()
@@ -166,6 +179,7 @@ class SqlDelightBirthEventRepository(
                     local_photo_path = cleanPhotoPath,
                     registered_by_user_id = draft.registeredByUserId,
                     notes = draft.notes?.trim()?.takeIf { it.isNotEmpty() },
+                    draft_key = normalizedDraftKey,
                     created_at = occurredAt,
                     updated_at = occurredAt
                 )

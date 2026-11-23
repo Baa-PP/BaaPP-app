@@ -150,7 +150,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
         birthSaveState = BirthSaveUiState.Saving(draftKey)
         viewModelScope.launch {
             try {
-                when (val res = repo.saveBirthEventOffline(draft, todayDateIso)) {
+                when (val res = repo.saveBirthEventOffline(draft, todayDateIso, draftKey)) {
                     is BirthSaveResult.Success -> {
                         birthSaveState = BirthSaveUiState.Success(draftKey, draft.localPhotoPath)
                     }
@@ -201,7 +201,14 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     if (isCleared) null else cachedDriver
                 }
                 val newDriver = if (existingDriver == null) {
-                    BirthDatabaseDriverFactory(appContext).createDriver()
+                    try {
+                        BirthDatabaseDriverFactory(appContext).createDriver()
+                    } catch (t: Throwable) {
+                        if (existingAuth == null) {
+                            authRepo.close()
+                        }
+                        throw t
+                    }
                 } else {
                     null
                 }

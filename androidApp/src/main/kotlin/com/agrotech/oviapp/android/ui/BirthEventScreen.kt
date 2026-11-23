@@ -110,10 +110,12 @@ fun BirthEventScreen(
     var liveOffspring by rememberSaveable(
         stateSaver = listSaver<List<LiveOffspringDraft>, String>(
             save = { list ->
-                list.flatMap { listOf(it.folioInterno, it.sex.name, it.color, it.birthWeightKg) }
+                listOf(list.size.toString()) +
+                    list.flatMap { listOf(it.folioInterno, it.sex.name, it.color, it.birthWeightKg) }
             },
             restore = { flat ->
-                flat.chunked(4).mapNotNull { chunk ->
+                val count = flat.firstOrNull()?.toIntOrNull() ?: 0
+                flat.drop(1).chunked(4).take(count).mapNotNull { chunk ->
                     if (chunk.size == 4) {
                         LiveOffspringDraft(
                             folioInterno = chunk[0],
@@ -229,7 +231,7 @@ fun BirthEventScreen(
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
-        if (uri != null) {
+        if (uri != null && !isCancelling) {
             scope.launch {
                 isCompressingPhoto = true
                 errorMessage = null
@@ -247,6 +249,12 @@ fun BirthEventScreen(
                         photoFile.absolutePath to compressed.size
                     }
                     val (newPath, compressedSize) = result
+                    if (isCancelling) {
+                        if (!birthEventRepository.isLocalPhotoReferenced(newPath)) {
+                            deleteBirthPhotoIfOwned(context.filesDir, newPath)
+                        }
+                        return@launch
+                    }
                     val previousPath = localPhotoPath
                     if (previousPath != null &&
                         previousPath != committedPhotoPath &&
@@ -379,14 +387,15 @@ fun BirthEventScreen(
                             val selectedDamLabel = damsList.firstOrNull { it.first == damId }?.second
                                 ?: "Seleccionar madre *"
                             ExposedDropdownMenuBox(
-                                expanded = damExpanded,
-                                onExpandedChange = { damExpanded = it },
+                                expanded = damExpanded && !isSaving,
+                                onExpandedChange = { if (!isSaving) damExpanded = it },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 OutlinedTextField(
                                     value = selectedDamLabel,
                                     onValueChange = {},
                                     readOnly = true,
+                                    enabled = !isSaving,
                                     label = { Text("Madre (Hembra del rancho) *") },
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = damExpanded) },
                                     modifier = Modifier.menuAnchor().fillMaxWidth(),
@@ -411,14 +420,15 @@ fun BirthEventScreen(
                             val selectedSireLabel = siresList.firstOrNull { it.first == sireId }?.second
                                 ?: "Ninguno / No especificado"
                             ExposedDropdownMenuBox(
-                                expanded = sireExpanded,
-                                onExpandedChange = { sireExpanded = it },
+                                expanded = sireExpanded && !isSaving,
+                                onExpandedChange = { if (!isSaving) sireExpanded = it },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 OutlinedTextField(
                                     value = selectedSireLabel,
                                     onValueChange = {},
                                     readOnly = true,
+                                    enabled = !isSaving,
                                     label = { Text("Semental (Opcional)") },
                                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sireExpanded) },
                                     modifier = Modifier.menuAnchor().fillMaxWidth(),
@@ -459,6 +469,7 @@ fun BirthEventScreen(
                                     FilterChip(
                                         selected = conceptionMethod == method,
                                         onClick = { conceptionMethod = method },
+                                        enabled = !isSaving,
                                         label = { Text(method.name) },
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = BaappSoftGreen
@@ -471,6 +482,7 @@ fun BirthEventScreen(
                             OutlinedTextField(
                                 value = birthDateIso,
                                 onValueChange = { birthDateIso = it },
+                                readOnly = isSaving,
                                 label = { Text("Fecha del Parto (YYYY-MM-DD) *") },
                                 placeholder = { Text("2026-11-22") },
                                 singleLine = true,
@@ -514,6 +526,7 @@ fun BirthEventScreen(
                             StepperRow(
                                 label = "Nacidos vivos",
                                 value = liveOffspring.size,
+                                enabled = !isSaving,
                                 onDecrement = {
                                     if (liveOffspring.size > 0 && (liveOffspring.size - 1 + stillborns) >= 1) {
                                         liveOffspring = liveOffspring.dropLast(1)
@@ -529,6 +542,7 @@ fun BirthEventScreen(
                             StepperRow(
                                 label = "Nacidos muertos",
                                 value = stillborns,
+                                enabled = !isSaving,
                                 onDecrement = {
                                     if (stillborns > 0 && (liveOffspring.size + stillborns - 1) >= 1) {
                                         stillborns--
@@ -566,6 +580,7 @@ fun BirthEventScreen(
                                             it[index] = child.copy(folioInterno = updated)
                                         }
                                     },
+                                    readOnly = isSaving,
                                     label = { Text("Arete / Folio Interno *") },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
@@ -583,6 +598,7 @@ fun BirthEventScreen(
                                                 it[index] = child.copy(sex = Sex.FEMALE)
                                             }
                                         },
+                                        enabled = !isSaving,
                                         label = { Text("♀ Hembra") },
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = BaappFemalePinkBg,
@@ -597,6 +613,7 @@ fun BirthEventScreen(
                                                 it[index] = child.copy(sex = Sex.MALE)
                                             }
                                         },
+                                        enabled = !isSaving,
                                         label = { Text("♂ Macho") },
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = BaappMaleBlueBg,
@@ -617,6 +634,7 @@ fun BirthEventScreen(
                                                 it[index] = child.copy(color = updated)
                                             }
                                         },
+                                        readOnly = isSaving,
                                         label = { Text("Color *") },
                                         singleLine = true,
                                         modifier = Modifier.weight(1f),
@@ -629,6 +647,7 @@ fun BirthEventScreen(
                                                 it[index] = child.copy(birthWeightKg = updated)
                                             }
                                         },
+                                        readOnly = isSaving,
                                         label = { Text("Peso nac. (kg) *") },
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                         singleLine = true,
@@ -694,6 +713,7 @@ fun BirthEventScreen(
                     OutlinedTextField(
                         value = notes,
                         onValueChange = { notes = it },
+                        readOnly = isSaving,
                         label = { Text("Notas del parto (opcional)") },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(8.dp)
@@ -743,6 +763,7 @@ fun BirthEventScreen(
 private fun StepperRow(
     label: String,
     value: Int,
+    enabled: Boolean = true,
     onDecrement: () -> Unit,
     onIncrement: () -> Unit
 ) {
@@ -755,6 +776,7 @@ private fun StepperRow(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = onDecrement,
+                enabled = enabled,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
                 Text("-", fontWeight = FontWeight.Bold, fontSize = 18.sp)
@@ -765,6 +787,7 @@ private fun StepperRow(
             )
             OutlinedButton(
                 onClick = onIncrement,
+                enabled = enabled,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
                 Text("+", fontWeight = FontWeight.Bold, fontSize = 18.sp)

@@ -5,7 +5,11 @@ import com.agrotech.oviapp.births.domain.model.BirthSaveResult
 import com.agrotech.oviapp.births.domain.model.SavedBirthEvent
 
 interface BirthEventRepository {
-    suspend fun saveBirthEventOffline(draft: BirthEventDraft, todayDateIso: String): BirthSaveResult
+    suspend fun saveBirthEventOffline(
+        draft: BirthEventDraft,
+        todayDateIso: String,
+        draftKey: String? = null
+    ): BirthSaveResult
     suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>>
     suspend fun getPotentialSires(ranchId: String): List<Pair<String, String>>
     suspend fun getSavedBirthEvents(ranchId: String): List<SavedBirthEvent> = emptyList()
