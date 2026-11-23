@@ -130,7 +130,7 @@ selectLatestLocalPhotoByAnimalId:
 SELECT local_photo_path FROM pending_sync_events
 WHERE entity_type = 'ANIMAL'
   AND payload_json LIKE ('%"id":"' || :animalId || '"%')
-ORDER BY occurred_at DESC
+ORDER BY sequence DESC
 LIMIT 1;
 
 countPendingSyncEventsByPhotoPath:
