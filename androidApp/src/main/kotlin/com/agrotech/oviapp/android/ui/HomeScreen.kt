@@ -33,6 +33,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -44,7 +48,24 @@ import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.auth.domain.RanchPermission
 import com.agrotech.oviapp.auth.domain.UserRole
 import com.agrotech.oviapp.births.domain.model.BirthImmutabilityPolicy
+import com.agrotech.oviapp.summary.RanchSummary
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+
+/** Sin rancho asignado o si la base local falla, la sección lo dice en lugar de mostrar ceros falsos. */
+private suspend fun loadRanchSummary(
+    ranchId: String?,
+    loadSummary: suspend (ranchId: String) -> RanchSummary,
+): RanchSummaryUi {
+    if (ranchId == null) return RanchSummaryUi.Unavailable
+    return try {
+        RanchSummaryUi.Ready(loadSummary(ranchId))
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        RanchSummaryUi.Unavailable
+    }
+}
 
 private val BaappPrimaryGreen = Color(0xFF1B5E20)
 private val BaappBackground = Color(0xFFF7F9F7)
@@ -62,6 +83,7 @@ fun HomeScreen(
     onOpenRegisterAnimalClick: () -> Unit = {},
     onOpenBirthEventClick: () -> Unit = {},
     onOpenSavedBirthsClick: () -> Unit = {},
+    loadSummary: (suspend (ranchId: String) -> RanchSummary)? = null,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -181,6 +203,15 @@ fun HomeScreen(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
+
+            // Resumen del rancho (APP-25): se recalcula cada vez que se vuelve a la pantalla principal.
+            if (loadSummary != null) {
+                val ranchId = session.ranchId
+                var summaryState by remember(ranchId) { mutableStateOf<RanchSummaryUi>(RanchSummaryUi.Loading) }
+                LaunchedEffect(ranchId) { summaryState = loadRanchSummary(ranchId, loadSummary) }
+                RanchSummarySection(summaryState)
+                Spacer(modifier = Modifier.height(20.dp))
+            }
 
             Text(
                 text = "Módulos de Corral (MVP 2026)",

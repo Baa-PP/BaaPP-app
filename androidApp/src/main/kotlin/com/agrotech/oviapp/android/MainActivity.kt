@@ -69,6 +69,7 @@ import com.agrotech.oviapp.db.DatabaseDriverFactory
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.LifeStage
 import com.agrotech.oviapp.domain.model.ReproductiveStatus
+import com.agrotech.oviapp.summary.RanchSummaryUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -304,7 +305,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                             database = db,
                             ioDispatcher = Dispatchers.IO
                         ).also { cachedBirthEventRepository = it }
-                    AppDependencies(authRepo, inv, cmd, births)
+                    AppDependencies(authRepo, inv, cmd, births, RanchSummaryUseCase(db))
                 }
 
                 val cachedSession = authRepo.getCachedSession()
@@ -361,7 +362,8 @@ data class AppDependencies(
     val authRepository: AuthRepository,
     val inventoryRepository: AnimalInventoryRepository,
     val commandRepository: AnimalCommandRepository,
-    val birthEventRepository: BirthEventRepository
+    val birthEventRepository: BirthEventRepository,
+    val ranchSummary: RanchSummaryUseCase
 )
 
 sealed interface InitialState {
@@ -396,6 +398,7 @@ private fun MainApp(viewModel: MainAppViewModel) {
                 inventoryRepository = state.dependencies.inventoryRepository,
                 commandRepository = state.dependencies.commandRepository,
                 birthEventRepository = state.dependencies.birthEventRepository,
+                ranchSummary = state.dependencies.ranchSummary,
                 session = viewModel.currentSession,
                 onSessionChange = { viewModel.updateSession(it) },
                 animalSaveState = viewModel.animalSaveState,
@@ -518,6 +521,7 @@ fun AppNavigation(
     inventoryRepository: AnimalInventoryRepository,
     commandRepository: AnimalCommandRepository,
     birthEventRepository: BirthEventRepository,
+    ranchSummary: RanchSummaryUseCase? = null,
     session: AuthSession?,
     onSessionChange: (AuthSession?) -> Unit,
     animalSaveState: AnimalSaveUiState = AnimalSaveUiState.Idle,
@@ -687,6 +691,9 @@ fun AppNavigation(
             is AppScreen.Home -> {
                 HomeScreen(
                     session = session,
+                    loadSummary = ranchSummary?.let { useCase ->
+                        { ranchId -> withContext(Dispatchers.IO) { useCase.summary(ranchId) } }
+                    },
                     onLogoutClick = {
                         authRepository.logout()
                         onResetAnimalSaveState()
