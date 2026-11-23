@@ -239,12 +239,18 @@ fun HomeScreen(
                         }
                     }
 
-                    if (capabilities.canEditGeneralRecords) {
+                    if (capabilities.canEditGeneralRecords && capabilities.canReadInventory) {
                         if (capabilities.canReadInventory || capabilities.canCapture) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
                         OutlinedButton(
-                            onClick = { showUpcomingNotice("Edición de ficha/arete disponible en APP-06") },
+                            onClick = {
+                                if (session.ranchId.isNullOrBlank()) {
+                                    showUpcomingNotice("No tienes un rancho asignado para editar ejemplares.")
+                                } else {
+                                    onOpenInventoryClick()
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 56.dp),

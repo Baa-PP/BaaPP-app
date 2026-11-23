@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -104,15 +105,19 @@ fun InventoryScreen(
     onBackClick: () -> Unit,
     onAnimalClick: (String) -> Unit = {},
     onEditAnimalClick: ((String) -> Unit)? = null,
+    selectedTabIndex: Int = 0,
+    onSelectedTabIndexChange: (Int) -> Unit = {},
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    selectedReproductiveStatus: ReproductiveStatus? = null,
+    onSelectedReproductiveStatusChange: (ReproductiveStatus?) -> Unit = {},
+    selectedLifeStage: LifeStage? = null,
+    onSelectedLifeStageChange: (LifeStage?) -> Unit = {},
+    listState: LazyListState = rememberLazyListState(),
     modifier: Modifier = Modifier
 ) {
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabs = remember { InventoryTab.entries }
-    val currentTab = tabs[selectedTabIndex]
-
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedReproductiveStatus by remember { mutableStateOf<ReproductiveStatus?>(null) }
-    var selectedLifeStage by remember { mutableStateOf<LifeStage?>(null) }
+    val currentTab = tabs[selectedTabIndex.coerceIn(0, tabs.lastIndex)]
 
     var ewesList by remember { mutableStateOf<List<EweInventoryItem>>(emptyList()) }
     var ramsList by remember { mutableStateOf<List<RamInventoryItem>>(emptyList()) }
@@ -129,7 +134,6 @@ fun InventoryScreen(
 
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
-    val listState = rememberLazyListState()
 
     // Reload list when tab, search, or filters change (or initial load retry)
     LaunchedEffect(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, initialRetryTrigger) {
@@ -305,9 +309,9 @@ fun InventoryScreen(
                     Tab(
                         selected = selectedTabIndex == index,
                         onClick = {
-                            selectedTabIndex = index
-                            selectedReproductiveStatus = null
-                            selectedLifeStage = null
+                            onSelectedTabIndexChange(index)
+                            onSelectedReproductiveStatusChange(null)
+                            onSelectedLifeStageChange(null)
                         },
                         text = {
                             Text(
@@ -329,7 +333,7 @@ fun InventoryScreen(
             ) {
                 OutlinedTextField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                    onValueChange = onSearchQueryChange,
                     placeholder = { Text("Buscar por arete interno o chip SINIIGA...") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -347,25 +351,25 @@ fun InventoryScreen(
                     ) {
                         FilterChip(
                             selected = selectedReproductiveStatus == null,
-                            onClick = { selectedReproductiveStatus = null },
+                            onClick = { onSelectedReproductiveStatusChange(null) },
                             label = { Text("Todas") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
                         FilterChip(
                             selected = selectedReproductiveStatus == ReproductiveStatus.EMPTY,
-                            onClick = { selectedReproductiveStatus = ReproductiveStatus.EMPTY },
+                            onClick = { onSelectedReproductiveStatusChange(ReproductiveStatus.EMPTY) },
                             label = { Text("Vacías") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
                         FilterChip(
                             selected = selectedReproductiveStatus == ReproductiveStatus.PREGNANT,
-                            onClick = { selectedReproductiveStatus = ReproductiveStatus.PREGNANT },
+                            onClick = { onSelectedReproductiveStatusChange(ReproductiveStatus.PREGNANT) },
                             label = { Text("Gestantes") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
                         FilterChip(
                             selected = selectedReproductiveStatus == ReproductiveStatus.LACTATING,
-                            onClick = { selectedReproductiveStatus = ReproductiveStatus.LACTATING },
+                            onClick = { onSelectedReproductiveStatusChange(ReproductiveStatus.LACTATING) },
                             label = { Text("Lactando") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
@@ -378,25 +382,25 @@ fun InventoryScreen(
                     ) {
                         FilterChip(
                             selected = selectedLifeStage == null,
-                            onClick = { selectedLifeStage = null },
+                            onClick = { onSelectedLifeStageChange(null) },
                             label = { Text("Todas") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
                         FilterChip(
                             selected = selectedLifeStage == LifeStage.LAMB_LACTATING,
-                            onClick = { selectedLifeStage = LifeStage.LAMB_LACTATING },
+                            onClick = { onSelectedLifeStageChange(LifeStage.LAMB_LACTATING) },
                             label = { Text("Lactancia") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
                         FilterChip(
                             selected = selectedLifeStage == LifeStage.LAMB_FATTENING,
-                            onClick = { selectedLifeStage = LifeStage.LAMB_FATTENING },
+                            onClick = { onSelectedLifeStageChange(LifeStage.LAMB_FATTENING) },
                             label = { Text("Engorda") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )
                         FilterChip(
                             selected = selectedLifeStage == LifeStage.EWE_REPLACEMENT,
-                            onClick = { selectedLifeStage = LifeStage.EWE_REPLACEMENT },
+                            onClick = { onSelectedLifeStageChange(LifeStage.EWE_REPLACEMENT) },
                             label = { Text("Reemplazo") },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BaappSoftGreen)
                         )

@@ -1,6 +1,7 @@
 package com.agrotech.oviapp.android.ui
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -45,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,6 +67,7 @@ import com.agrotech.oviapp.domain.model.ParturitionType
 import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.media.ImageCompressor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -120,6 +123,9 @@ fun AnimalFormScreen(
     var localPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
     var photoSizeBytes by rememberSaveable { mutableStateOf<Int?>(null) }
     var photoS3Key by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftCreatedPhotos by rememberSaveable(
+        stateSaver = listSaver(save = { it }, restore = { it })
+    ) { mutableStateOf(emptyList<String>()) }
     var hasLoadedExisting by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(false) }
     var isCompressingPhoto by remember { mutableStateOf(false) }
 
@@ -128,7 +134,7 @@ fun AnimalFormScreen(
 
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
-    var isLoadingExisting by remember { mutableStateOf(false) }
+    var isLoadingExisting by remember { mutableStateOf(true) }
 
     var breedExpanded by remember { mutableStateOf(false) }
     var lifeStageExpanded by remember { mutableStateOf(false) }
@@ -136,37 +142,54 @@ fun AnimalFormScreen(
     var damExpanded by remember { mutableStateOf(false) }
     var sireExpanded by remember { mutableStateOf(false) }
 
+    val handleCancelAndCleanup: () -> Unit = {
+        draftCreatedPhotos.forEach { path ->
+            deletePendingPhotoIfOwned(context.filesDir, path)
+        }
+        draftCreatedPhotos = emptyList()
+        onNavigateBack()
+    }
+
+    BackHandler(enabled = !isSaving) {
+        handleCancelAndCleanup()
+    }
+
     // Load parental dropdowns and existing animal if editing
     LaunchedEffect(ranchId, animalIdToEdit) {
-        damsList = commandRepository.getPotentialDams(ranchId)
-        siresList = commandRepository.getPotentialSires(ranchId)
+        isLoadingExisting = true
+        try {
+            damsList = commandRepository.getPotentialDams(ranchId)
+            siresList = commandRepository.getPotentialSires(ranchId)
 
-        if (animalIdToEdit != null && !hasLoadedExisting) {
-            isLoadingExisting = true
-            val existing = commandRepository.getAnimalById(animalIdToEdit)
-            if (existing != null) {
-                folioInterno = existing.folioInterno
-                siniigaChip = existing.siniigaChip ?: ""
-                registroUno = existing.registroUno ?: ""
-                adn = existing.adn ?: ""
-                breed = existing.breed
-                color = existing.color
-                sex = existing.sex
-                birthDate = existing.birthDateIso
-                weaningDate = existing.weaningDateIso ?: ""
-                parturitionType = existing.parturitionType
-                conceptionMethod = existing.conceptionMethod
-                entryReason = try { EntryReason.valueOf(existing.entryReason) } catch (_: Exception) { EntryReason.BIRTH }
-                criadorName = existing.criadorName ?: ""
-                sireId = existing.sireId
-                damId = existing.damId
-                externalSireFolio = existing.externalSireFolio ?: ""
-                externalDamFolio = existing.externalDamFolio ?: ""
-                lifeStage = existing.lifeStage
-                reproductiveStatus = existing.reproductiveStatus
-                photoS3Key = existing.photoS3Key
-                hasLoadedExisting = true
+            if (animalIdToEdit != null && !hasLoadedExisting) {
+                val existing = commandRepository.getAnimalById(animalIdToEdit)
+                if (existing != null) {
+                    folioInterno = existing.folioInterno
+                    siniigaChip = existing.siniigaChip ?: ""
+                    registroUno = existing.registroUno ?: ""
+                    adn = existing.adn ?: ""
+                    breed = existing.breed
+                    color = existing.color
+                    sex = existing.sex
+                    birthDate = existing.birthDateIso
+                    weaningDate = existing.weaningDateIso ?: ""
+                    parturitionType = existing.parturitionType
+                    conceptionMethod = existing.conceptionMethod
+                    entryReason = try { EntryReason.valueOf(existing.entryReason) } catch (_: Exception) { EntryReason.BIRTH }
+                    criadorName = existing.criadorName ?: ""
+                    sireId = existing.sireId
+                    damId = existing.damId
+                    externalSireFolio = existing.externalSireFolio ?: ""
+                    externalDamFolio = existing.externalDamFolio ?: ""
+                    lifeStage = existing.lifeStage
+                    reproductiveStatus = existing.reproductiveStatus
+                    photoS3Key = existing.photoS3Key
+                    hasLoadedExisting = true
+                }
             }
+        } catch (e: CancellationException) {
+            throw e
+        } finally {
             isLoadingExisting = false
         }
     }
@@ -179,28 +202,38 @@ fun AnimalFormScreen(
             scope.launch {
                 isCompressingPhoto = true
                 errorMessage = null
-                withContext(Dispatchers.IO) {
-                    try {
+                var createdFile: File? = null
+                try {
+                    val result = withContext(Dispatchers.IO) {
                         val inputBytes = context.contentResolver.openInputStream(uri)?.use { stream ->
                             readBoundedPhotoBytes(stream, MAX_SOURCE_PHOTO_BYTES)
+                        } ?: return@withContext null
+                        val compressedBytes = ImageCompressor.compressToTarget(inputBytes, 200 * 1024)
+                        val photosDir = File(context.filesDir, PENDING_PHOTOS_DIR_NAME).apply { mkdirs() }
+                        val photoFile = File(photosDir, "animal_${System.currentTimeMillis()}.jpg")
+                        createdFile = photoFile
+                        FileOutputStream(photoFile).use { fos ->
+                            fos.write(compressedBytes)
                         }
-                        if (inputBytes != null) {
-                            val compressedBytes = ImageCompressor.compressToTarget(inputBytes, 200 * 1024)
-                            val photosDir = File(context.filesDir, PENDING_PHOTOS_DIR_NAME).apply { mkdirs() }
-                            val photoFile = File(photosDir, "animal_${System.currentTimeMillis()}.jpg")
-                            FileOutputStream(photoFile).use { fos ->
-                                fos.write(compressedBytes)
-                            }
-                            deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
-                            localPhotoPath = photoFile.absolutePath
-                            photoSizeBytes = compressedBytes.size
-                            photoS3Key = null
-                        }
-                    } catch (e: Exception) {
-                        errorMessage = "Error procesando fotografía: ${e.message}"
+                        photoFile.absolutePath to compressedBytes.size
                     }
+                    if (result != null) {
+                        val (newPath, compressedSize) = result
+                        deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                        draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath } + newPath
+                        localPhotoPath = newPath
+                        photoSizeBytes = compressedSize
+                        photoS3Key = null
+                    }
+                } catch (e: CancellationException) {
+                    createdFile?.let { deletePendingPhotoIfOwned(context.filesDir, it.absolutePath) }
+                    throw e
+                } catch (e: Exception) {
+                    createdFile?.let { deletePendingPhotoIfOwned(context.filesDir, it.absolutePath) }
+                    errorMessage = "Error procesando fotografía: ${e.message}"
+                } finally {
+                    isCompressingPhoto = false
                 }
-                isCompressingPhoto = false
             }
         }
     }
@@ -213,7 +246,7 @@ fun AnimalFormScreen(
             TopAppBar(
                 title = { Text(screenTitle, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    TextButton(onClick = onNavigateBack) {
+                    TextButton(onClick = handleCancelAndCleanup, enabled = !isSaving) {
                         Text("← Cancelar", color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
                 },
@@ -707,6 +740,10 @@ fun AnimalFormScreen(
                             isSaving = false
                             when (res) {
                                 is AnimalSaveResult.Success -> {
+                                    draftCreatedPhotos
+                                        .filterNot { it == localPhotoPath }
+                                        .forEach { obsolete -> deletePendingPhotoIfOwned(context.filesDir, obsolete) }
+                                    draftCreatedPhotos = emptyList()
                                     onNavigateBack()
                                 }
                                 is AnimalSaveResult.DuplicateFolio -> {

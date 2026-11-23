@@ -10,7 +10,9 @@ import kotlin.math.roundToInt
 
 actual object ImageCompressor {
     actual fun compressToTarget(inputBytes: ByteArray, maxBytes: Int): ByteArray {
-        if (inputBytes.isEmpty()) return inputBytes
+        if (inputBytes.isEmpty()) {
+            throw IllegalArgumentException("La fotografía está vacía.")
+        }
 
         // First decode dimensions only
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -19,7 +21,9 @@ actual object ImageCompressor {
         val srcWidth = options.outWidth
         val srcHeight = options.outHeight
 
-        if (srcWidth <= 0 || srcHeight <= 0) return inputBytes
+        if (srcWidth <= 0 || srcHeight <= 0) {
+            throw IllegalArgumentException("No se pudo decodificar la fotografía seleccionada.")
+        }
 
         // Scale down if resolution is larger than full HD (1920x1080) to conserve memory in field conditions
         val maxDim = 1920
@@ -35,7 +39,7 @@ actual object ImageCompressor {
         }
 
         val decodedBitmap = BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, decodeOptions)
-            ?: return inputBytes
+            ?: throw IllegalArgumentException("No se pudo decodificar la fotografía seleccionada.")
 
         val originalBitmap = applyExifOrientation(decodedBitmap, inputBytes)
 

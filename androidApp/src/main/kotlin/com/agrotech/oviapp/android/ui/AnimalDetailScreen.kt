@@ -197,7 +197,7 @@ private fun AnimalSummaryCard(animal: Animal) {
     val sexColor = if (isMale) BaappMaleBlue else BaappFemalePink
     val sexBg = if (isMale) BaappMaleBlueBg else BaappFemalePinkBg
 
-    val (statusText, statusBg, statusColor) = statusPresentation(animal.status)
+    val (statusText, statusBg, statusColor) = statusPresentation(animal.status, animal.sex)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -334,7 +334,7 @@ private fun ParentNavigationRow(
     onClick: () -> Unit
 ) {
     if (parent != null) {
-        val (statusText, statusBg, statusColor) = statusPresentation(parent.status)
+        val (statusText, statusBg, statusColor) = statusPresentation(parent.status, parent.sex)
         OutlinedButton(
             onClick = onClick,
             modifier = Modifier
@@ -431,7 +431,7 @@ private fun OffspringItemRow(
 ) {
     val isMale = child.sex == Sex.MALE
     val sexSymbol = if (isMale) "♂" else "♀"
-    val (statusText, statusBg, statusColor) = statusPresentation(child.status)
+    val (statusText, statusBg, statusColor) = statusPresentation(child.status, child.sex)
 
     Card(
         onClick = onClick,
@@ -459,7 +459,7 @@ private fun OffspringItemRow(
                 )
                 if (child.status == AnimalStatus.DECEASED && !child.mortalityDateIso.isNullOrBlank()) {
                     Text(
-                        text = "Fallecida el ${child.mortalityDateIso}",
+                        text = "Baja por fallecimiento (${child.mortalityDateIso})",
                         style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFFB71C1C))
                     )
                 }
@@ -479,10 +479,22 @@ private fun OffspringItemRow(
     }
 }
 
-private fun statusPresentation(status: AnimalStatus): Triple<String, Color, Color> = when (status) {
-    AnimalStatus.ACTIVE -> Triple("Activa", BaappSoftGreen, BaappPrimaryGreen)
-    AnimalStatus.DECEASED -> Triple("Fallecida", Color(0xFFFFEBEE), Color(0xFFB71C1C))
-    AnimalStatus.SOLD -> Triple("Vendida", Color(0xFFFFF8E1), Color(0xFF8D6E00))
+private fun statusPresentation(status: AnimalStatus, sex: Sex): Triple<String, Color, Color> = when (status) {
+    AnimalStatus.ACTIVE -> Triple(
+        if (sex == Sex.MALE) "Activo" else "Activa",
+        BaappSoftGreen,
+        BaappPrimaryGreen
+    )
+    AnimalStatus.DECEASED -> Triple(
+        if (sex == Sex.MALE) "Fallecido" else "Fallecida",
+        Color(0xFFFFEBEE),
+        Color(0xFFB71C1C)
+    )
+    AnimalStatus.SOLD -> Triple(
+        if (sex == Sex.MALE) "Vendido" else "Vendida",
+        Color(0xFFFFF8E1),
+        Color(0xFF8D6E00)
+    )
 }
 
 private fun lifeStageText(stage: LifeStage): String = when (stage) {

@@ -66,8 +66,16 @@ class SqlDelightAnimalCommandRepository(
                 )
             }
 
-            database.transaction {
+            val result = database.transactionWithResult<AnimalSaveResult> {
                 if (isEdit) {
+                    val existingAnimal = database.oviAppDatabaseQueries
+                        .selectAnimalById(animalId)
+                        .executeAsOneOrNull()
+                    if (existingAnimal == null) {
+                        return@transactionWithResult AnimalSaveResult.Error(
+                            "No se encontró el ejemplar a editar."
+                        )
+                    }
                     database.oviAppDatabaseQueries.updateAnimalFormFields(
                         ranch_id = formState.ranchId,
                         folio_interno = targetFolio,
@@ -136,8 +144,9 @@ class SqlDelightAnimalCommandRepository(
                     local_photo_path = formState.localPhotoPath,
                     sync_status = "PENDING"
                 )
+                AnimalSaveResult.Success(animalId, mutationId)
             }
-            AnimalSaveResult.Success(animalId, mutationId)
+            result
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

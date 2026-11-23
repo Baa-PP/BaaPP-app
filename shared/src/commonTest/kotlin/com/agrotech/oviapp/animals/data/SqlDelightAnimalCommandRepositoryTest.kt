@@ -361,4 +361,18 @@ class SqlDelightAnimalCommandRepositoryTest {
         assertEquals(205, dams.size)
         assertTrue(dams.any { it.first == lastId && it.second == "DAM-205" })
     }
+
+    @Test
+    fun testEditMissingAnimalReturnsErrorWithoutEnqueueingEvent() = runTest {
+        val missingEdit = AnimalFormState(
+            id = UuidV7.generate(),
+            ranchId = "ranch-missing",
+            folioInterno = "MISSING-1",
+            color = "Blanco",
+            birthDate = "2024-01-01"
+        )
+        val result = repository.saveAnimalOffline(missingEdit)
+        assertIs<AnimalSaveResult.Error>(result)
+        assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
+    }
 }

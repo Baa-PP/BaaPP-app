@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.android
 
+import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -23,8 +25,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -37,6 +39,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import app.cash.sqldelight.db.SqlDriver
 import com.agrotech.oviapp.android.ui.AnimalDetailScreen
 import com.agrotech.oviapp.android.ui.AnimalFormScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
@@ -51,7 +57,9 @@ import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.db.DatabaseDriverFactory
-import com.agrotech.oviapp.db.createDatabase
+import com.agrotech.oviapp.db.OviAppDatabase
+import com.agrotech.oviapp.domain.model.LifeStage
+import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -61,114 +69,111 @@ private val BaappPrimaryGreen = Color(0xFF1B5E20)
 
 class MainActivity : ComponentActivity() {
 
-    private val repositoryLock = Any()
-    private var isDestroyed = false
-    private var activeRepository: AuthRepository? = null
-
-    /**
-     * Synchronizes repository ownership between initialization and destruction.
-     * If destruction occurred before publication, closes the repository immediately.
-     */
-    private fun publishOrClose(repository: AuthRepository): Boolean {
-        synchronized(repositoryLock) {
-            if (isDestroyed) {
-                repository.close()
-                return false
-            }
-            activeRepository = repository
-            return true
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val viewModel = ViewModelProvider(
+            this,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+        )[MainAppViewModel::class.java]
 
         setContent {
             MaterialTheme {
                 Surface {
-                    MainApp(
-                        onInitRepository = {
-                            val sessionStorage = AndroidEncryptedSessionStorage(applicationContext)
-                            val authService = KtorAuthService()
-                            val repository = AuthRepository(authService, sessionStorage)
-
-                            var publicationKept = false
-                            try {
-                                val driverFactory = DatabaseDriverFactory(applicationContext)
-                                val database = createDatabase(driverFactory)
-                                val inventoryRepo = SqlDelightAnimalInventoryRepository(database)
-                                val commandRepo = SqlDelightAnimalCommandRepository(
-                                    database = database,
-                                    sessionStorage = sessionStorage
-                                )
-
-                                val cachedSession = repository.getCachedSession()
-                                val published = publishOrClose(repository)
-                                if (published) {
-                                    publicationKept = true
-                                    AppDependencies(repository, inventoryRepo, commandRepo, cachedSession)
-                                } else {
-                                    null
-                                }
-                            } finally {
-                                if (!publicationKept) {
-                                    repository.close()
-                                }
-                            }
-                        },
-                        onResetStorage = {
-                            applicationContext.deleteSharedPreferences("baapp_secure_session_prefs")
-                        }
-                    )
+                    MainApp(viewModel = viewModel)
                 }
             }
         }
     }
+}
 
-    override fun onDestroy() {
-        super.onDestroy()
-        val repositoryToClose = synchronized(repositoryLock) {
-            isDestroyed = true
-            activeRepository.also { activeRepository = null }
-        }
-        repositoryToClose?.close()
+class MainAppViewModel(application: Application) : AndroidViewModel(application) {
+    var state by mutableStateOf<InitialState>(InitialState.Loading)
+        private set
+    var isBusy by mutableStateOf(false)
+        private set
+
+    private var cachedDriver: SqlDriver? = null
+    private var cachedDatabase: OviAppDatabase? = null
+    private var cachedAuthRepository: AuthRepository? = null
+    private var cachedInventoryRepository: AnimalInventoryRepository? = null
+    private var cachedCommandRepository: AnimalCommandRepository? = null
+
+    init {
+        initialize()
     }
-}
 
-private data class AppDependencies(
-    val authRepository: AuthRepository,
-    val inventoryRepository: AnimalInventoryRepository,
-    val commandRepository: AnimalCommandRepository,
-    val cachedSession: AuthSession?
-)
+    fun retryInitialization() {
+        if (isBusy) return
+        initialize()
+    }
 
-private sealed interface InitialState {
-    data object Loading : InitialState
-    data class Ready(
-        val dependencies: AppDependencies
-    ) : InitialState
-    data class Error(val message: String) : InitialState
-}
+    fun resetStorageAndRetry() {
+        if (isBusy) return
+        isBusy = true
+        viewModelScope.launch {
+            try {
+                val deleted = withContext(Dispatchers.IO) {
+                    getApplication<Application>().deleteSharedPreferences("baapp_secure_session_prefs")
+                }
+                if (deleted) {
+                    cachedAuthRepository?.close()
+                    cachedAuthRepository = null
+                    cachedCommandRepository = null
+                    initializeInternal()
+                } else {
+                    state = InitialState.Error("No se pudo restablecer el almacenamiento seguro.")
+                    isBusy = false
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                state = InitialState.Error(e.message ?: "No se pudo restablecer el almacenamiento seguro.")
+                isBusy = false
+            }
+        }
+    }
 
-@Composable
-private fun MainApp(
-    onInitRepository: suspend () -> AppDependencies?,
-    onResetStorage: suspend () -> Boolean
-) {
-    var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
-    var retryKey by remember { mutableStateOf(0) }
-    var isBusy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    private fun initialize() {
+        isBusy = true
+        viewModelScope.launch {
+            initializeInternal()
+        }
+    }
 
-    LaunchedEffect(retryKey) {
+    private suspend fun initializeInternal() {
         state = InitialState.Loading
         try {
-            val result = withContext(Dispatchers.IO) {
-                onInitRepository()
+            val dependencies = withContext(Dispatchers.IO) {
+                val appContext = getApplication<Application>()
+                val sessionStorage = AndroidEncryptedSessionStorage(appContext)
+                val authRepo = cachedAuthRepository ?: AuthRepository(
+                    KtorAuthService(),
+                    sessionStorage
+                ).also { cachedAuthRepository = it }
+
+                val driver = cachedDriver ?: DatabaseDriverFactory(appContext).createDriver().also {
+                    cachedDriver = it
+                }
+                val database = cachedDatabase ?: OviAppDatabase(driver).also {
+                    cachedDatabase = it
+                }
+                val inventoryRepo = cachedInventoryRepository
+                    ?: SqlDelightAnimalInventoryRepository(database).also {
+                        cachedInventoryRepository = it
+                    }
+                val commandRepo = cachedCommandRepository
+                    ?: SqlDelightAnimalCommandRepository(
+                        database = database,
+                        sessionStorage = sessionStorage
+                    ).also {
+                        cachedCommandRepository = it
+                    }
+
+                val cachedSession = authRepo.getCachedSession()
+                AppDependencies(authRepo, inventoryRepo, commandRepo, cachedSession)
             }
-            if (result != null) {
-                state = InitialState.Ready(result)
-            }
+            state = InitialState.Ready(dependencies)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -180,7 +185,38 @@ private fun MainApp(
         }
     }
 
-    when (val current = state) {
+    override fun onCleared() {
+        super.onCleared()
+        cachedAuthRepository?.close()
+        cachedAuthRepository = null
+        cachedDriver?.close()
+        cachedDriver = null
+    }
+}
+
+data class AppDependencies(
+    val authRepository: AuthRepository,
+    val inventoryRepository: AnimalInventoryRepository,
+    val commandRepository: AnimalCommandRepository,
+    val cachedSession: AuthSession?
+)
+
+sealed interface InitialState {
+    data object Loading : InitialState
+    data class Ready(
+        val dependencies: AppDependencies
+    ) : InitialState
+    data class Error(val message: String) : InitialState
+}
+
+@Composable
+private fun MainApp(
+    viewModel: MainAppViewModel
+) {
+    val state = viewModel.state
+    val isBusy = viewModel.isBusy
+
+    when (state) {
         is InitialState.Loading -> {
             Box(
                 modifier = Modifier
@@ -197,10 +233,10 @@ private fun MainApp(
         }
         is InitialState.Ready -> {
             AppNavigation(
-                authRepository = current.dependencies.authRepository,
-                inventoryRepository = current.dependencies.inventoryRepository,
-                commandRepository = current.dependencies.commandRepository,
-                initialSession = current.dependencies.cachedSession
+                authRepository = state.dependencies.authRepository,
+                inventoryRepository = state.dependencies.inventoryRepository,
+                commandRepository = state.dependencies.commandRepository,
+                initialSession = state.dependencies.cachedSession
             )
         }
         is InitialState.Error -> {
@@ -230,18 +266,13 @@ private fun MainApp(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = current.message,
+                            text = state.message,
                             style = MaterialTheme.typography.bodyMedium.copy(color = Color.DarkGray),
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
-                            onClick = {
-                                if (!isBusy) {
-                                    isBusy = true
-                                    retryKey++
-                                }
-                            },
+                            onClick = { viewModel.retryInitialization() },
                             enabled = !isBusy,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -253,33 +284,7 @@ private fun MainApp(
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
-                            onClick = {
-                                if (!isBusy) {
-                                    isBusy = true
-                                    scope.launch {
-                                        try {
-                                            val deleted = withContext(Dispatchers.IO) {
-                                                onResetStorage()
-                                            }
-                                            if (deleted) {
-                                                retryKey++
-                                            } else {
-                                                state = InitialState.Error(
-                                                    "No se pudo restablecer el almacenamiento seguro."
-                                                )
-                                                isBusy = false
-                                            }
-                                        } catch (e: CancellationException) {
-                                            throw e
-                                        } catch (e: Throwable) {
-                                            state = InitialState.Error(
-                                                e.message ?: "No se pudo restablecer el almacenamiento seguro."
-                                            )
-                                            isBusy = false
-                                        }
-                                    }
-                                }
-                            },
+                            onClick = { viewModel.resetStorageAndRetry() },
                             enabled = !isBusy,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -344,6 +349,11 @@ fun AppNavigation(
         mutableStateOf(emptyList())
     }
     var returnToDetailId by rememberSaveable { mutableStateOf<String?>(null) }
+    var inventoryTabIndex by rememberSaveable { mutableIntStateOf(0) }
+    var inventorySearchQuery by rememberSaveable { mutableStateOf("") }
+    var inventoryReproductiveStatus by rememberSaveable { mutableStateOf<ReproductiveStatus?>(null) }
+    var inventoryLifeStage by rememberSaveable { mutableStateOf<LifeStage?>(null) }
+    val inventoryListState = rememberLazyListState()
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -369,7 +379,16 @@ fun AppNavigation(
                             }
                         } else {
                             null
-                        }
+                        },
+                        selectedTabIndex = inventoryTabIndex,
+                        onSelectedTabIndexChange = { inventoryTabIndex = it },
+                        searchQuery = inventorySearchQuery,
+                        onSearchQueryChange = { inventorySearchQuery = it },
+                        selectedReproductiveStatus = inventoryReproductiveStatus,
+                        onSelectedReproductiveStatusChange = { inventoryReproductiveStatus = it },
+                        selectedLifeStage = inventoryLifeStage,
+                        onSelectedLifeStageChange = { inventoryLifeStage = it },
+                        listState = inventoryListState
                     )
                 } else {
                     currentScreen = AppScreen.Home
@@ -443,6 +462,10 @@ fun AppNavigation(
                         session = null
                         detailBackStack = emptyList()
                         returnToDetailId = null
+                        inventoryTabIndex = 0
+                        inventorySearchQuery = ""
+                        inventoryReproductiveStatus = null
+                        inventoryLifeStage = null
                         currentScreen = AppScreen.Home
                         errorMessage = null
                     },
