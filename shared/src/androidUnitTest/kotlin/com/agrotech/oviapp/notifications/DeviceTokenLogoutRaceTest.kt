@@ -26,7 +26,7 @@ class DeviceTokenLogoutRaceTest {
         // Ya pasó la revisión de generación y va a escribir: el logout intenta correr justo ahí.
         store.beforeWrite = { runNow { DeviceTokenRegistrar(OkApi, store).onLogout() } }
 
-        registrar.registerIfNeeded(isLoggedIn = true)
+        registrar.registerIfNeeded(accountId = "user-a")
         testScheduler.advanceUntilIdle()
 
         assertEquals(1, store.sessionGeneration)
@@ -44,11 +44,12 @@ class DeviceTokenLogoutRaceTest {
         store.afterWrite = {
             runNow {
                 launch { DeviceTokenRegistrar(api, store).onLogout() }
-                launch { nextUser = DeviceTokenRegistrar(api, store).registerIfNeeded(isLoggedIn = true) }
+                // Misma cuenta a propósito: la marca coincidiría, así que solo el orden del candado la salva.
+                launch { nextUser = DeviceTokenRegistrar(api, store).registerIfNeeded(accountId = "user-a") }
             }
         }
 
-        val previousUser = async { DeviceTokenRegistrar(api, store).registerIfNeeded(isLoggedIn = true) }
+        val previousUser = async { DeviceTokenRegistrar(api, store).registerIfNeeded(accountId = "user-a") }
         testScheduler.advanceUntilIdle()
 
         assertIs<DeviceTokenRegistration.Registered>(previousUser.await())
@@ -80,6 +81,7 @@ class DeviceTokenLogoutRaceTest {
         var afterWrite: (() -> Unit)? = null
 
         override var pendingToken: String? = null
+        override var registeredAccount: String? = null
         override var sessionGeneration: Long = 0
         private var registered: String? = null
 

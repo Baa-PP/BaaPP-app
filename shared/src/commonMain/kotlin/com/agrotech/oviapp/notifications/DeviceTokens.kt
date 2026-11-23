@@ -36,12 +36,16 @@ interface DeviceTokenApi {
 interface DeviceTokenStore {
     var pendingToken: String?
     var registeredToken: String?
+
+    /** Cuenta para la que se registró [registeredToken]: una marca de otra cuenta nunca cuenta como registro. */
+    var registeredAccount: String?
     var sessionGeneration: Long
 }
 
 class InMemoryDeviceTokenStore : DeviceTokenStore {
     override var pendingToken: String? = null
     override var registeredToken: String? = null
+    override var registeredAccount: String? = null
     override var sessionGeneration: Long = 0
 }
 
@@ -70,17 +74,25 @@ class DeviceTokenRegistrar(
     suspend fun onLogout() {
         sessionLock.withLock {
             store.sessionGeneration += 1
+            store.registeredAccount = null
             store.registeredToken = null
         }
     }
 
-    suspend fun registerIfNeeded(isLoggedIn: Boolean): DeviceTokenRegistration {
+    /**
+     * [accountId] es la cuenta de la sesión activa (null = sin sesión). La marca de "ya registrado" es por
+     * token **y** cuenta: aunque un logout no alcance a borrarla (se cancela o Android mata el proceso), el
+     * siguiente usuario no la confunde con la suya y vuelve a registrar el celular.
+     */
+    suspend fun registerIfNeeded(accountId: String?): DeviceTokenRegistration {
         val token = store.pendingToken ?: return DeviceTokenRegistration.NoToken
-        if (!isLoggedIn) return DeviceTokenRegistration.NotLoggedIn
+        if (accountId == null) return DeviceTokenRegistration.NotLoggedIn
         // La marca y la generación se leen bajo el candado: si hay un logout esperando, corre antes y esta
         // revisión ya ve la marca borrada (si no, el siguiente usuario creería que ya está registrado).
         val generation = sessionLock.withLock {
-            if (token == store.registeredToken) return DeviceTokenRegistration.AlreadyRegistered
+            if (token == store.registeredToken && accountId == store.registeredAccount) {
+                return DeviceTokenRegistration.AlreadyRegistered
+            }
             store.sessionGeneration
         }
         return try {
@@ -89,7 +101,10 @@ class DeviceTokenRegistrar(
             // no se marca, para que el siguiente usuario sí registre el celular. La revisión y la
             // escritura van bajo el mismo candado que onLogout, así un logout no puede colarse entre ellas.
             sessionLock.withLock {
-                if (store.sessionGeneration == generation) store.registeredToken = token
+                if (store.sessionGeneration == generation) {
+                    store.registeredAccount = accountId
+                    store.registeredToken = token
+                }
             }
             DeviceTokenRegistration.Registered
         } catch (cancellation: kotlinx.coroutines.CancellationException) {

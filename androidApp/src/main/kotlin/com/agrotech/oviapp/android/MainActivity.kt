@@ -158,6 +158,7 @@ class MainAppViewModel(
         // El token FCM se registra con el JWT de la sesión activa (BE-015).
         Notifications.session = object : SessionProvider {
             override suspend fun accessToken(): String? = currentSession?.accessToken
+            override suspend fun accountId(): String? = currentSession?.username
         }
         initialize()
     }

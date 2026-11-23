@@ -16,8 +16,9 @@ import java.util.concurrent.TimeUnit
 class DeviceTokenWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val isLoggedIn = Notifications.session.accessToken() != null
-        return when (Notifications.registrar(applicationContext).registerIfNeeded(isLoggedIn)) {
+        val session = Notifications.session
+        val accountId = if (session.accessToken() != null) session.accountId() else null
+        return when (Notifications.registrar(applicationContext).registerIfNeeded(accountId)) {
             is DeviceTokenRegistration.RetryLater -> Result.retry()
             else -> Result.success()
         }

@@ -6,8 +6,12 @@ package com.agrotech.oviapp.android.session
  */
 interface SessionProvider {
     suspend fun accessToken(): String?
+
+    /** Identidad de la cuenta activa; el registro del token FCM se marca por cuenta. */
+    suspend fun accountId(): String?
 }
 
 object NoSessionYet : SessionProvider {
     override suspend fun accessToken(): String? = null
+    override suspend fun accountId(): String? = null
 }
