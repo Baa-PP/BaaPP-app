@@ -33,6 +33,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agrotech.oviapp.android.AnimalSaveUiState
+import com.agrotech.oviapp.android.ui.theme.FieldPalette
 import com.agrotech.oviapp.animals.domain.model.AnimalFormState
 import com.agrotech.oviapp.animals.domain.repository.AnimalCommandRepository
 import com.agrotech.oviapp.domain.model.UuidV7
@@ -71,6 +73,7 @@ import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.media.ImageCompressor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -81,13 +84,11 @@ import java.io.InputStream
 private const val MAX_SOURCE_PHOTO_BYTES = 15 * 1024 * 1024
 private const val PENDING_PHOTOS_DIR_NAME = "pending_animal_photos"
 
-private val BaappPrimaryGreen = Color(0xFF1B5E20)
-private val BaappBackground = Color(0xFFF7F9F7)
-private val BaappSoftGreen = Color(0xFFE8F5E9)
-private val BaappFemalePink = Color(0xFFD81B60)
-private val BaappFemalePinkBg = Color(0xFFFCE4EC)
-private val BaappMaleBlue = Color(0xFF1565C0)
-private val BaappMaleBlueBg = Color(0xFFE3F2FD)
+private val BaappPrimaryGreen = Color(FieldPalette.PASTURE)
+private val BaappFemalePink = Color(FieldPalette.FEMALE)
+private val BaappFemalePinkBg = Color(FieldPalette.FEMALE_CONTAINER)
+private val BaappMaleBlue = Color(FieldPalette.MALE)
+private val BaappMaleBlueBg = Color(FieldPalette.MALE_CONTAINER)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,40 +107,42 @@ fun AnimalFormScreen(
     val scrollState = rememberScrollState()
     val draftKey = rememberSaveable(ranchId, animalIdToEdit) { UuidV7.generate() }
 
-    var folioInterno by rememberSaveable { mutableStateOf("") }
-    var siniigaChip by rememberSaveable { mutableStateOf("") }
-    var registroUno by rememberSaveable { mutableStateOf("") }
-    var adn by rememberSaveable { mutableStateOf("") }
-    var breed by rememberSaveable { mutableStateOf("Pelifolk") }
-    var color by rememberSaveable { mutableStateOf("") }
-    var sex by rememberSaveable { mutableStateOf(Sex.FEMALE) }
-    var birthDate by rememberSaveable { mutableStateOf("") }
-    var weaningDate by rememberSaveable { mutableStateOf("") }
-    var parturitionType by rememberSaveable { mutableStateOf(ParturitionType.SIMPLE) }
-    var conceptionMethod by rememberSaveable { mutableStateOf(ConceptionMethod.MN) }
-    var entryReason by rememberSaveable { mutableStateOf(EntryReason.BIRTH) }
-    var criadorName by rememberSaveable { mutableStateOf("") }
-    var sireId by rememberSaveable { mutableStateOf<String?>(null) }
-    var damId by rememberSaveable { mutableStateOf<String?>(null) }
-    var externalSireFolio by rememberSaveable { mutableStateOf("") }
-    var externalDamFolio by rememberSaveable { mutableStateOf("") }
-    var lifeStage by rememberSaveable { mutableStateOf(LifeStage.ADULT) }
-    var reproductiveStatus by rememberSaveable { mutableStateOf(ReproductiveStatus.EMPTY) }
+    var folioInterno by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var siniigaChip by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var registroUno by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var adn by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var breed by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("Pelifolk") }
+    var color by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var sex by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(Sex.FEMALE) }
+    var birthDate by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var weaningDate by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var parturitionType by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(ParturitionType.SIMPLE) }
+    var conceptionMethod by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(ConceptionMethod.MN) }
+    var entryReason by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(EntryReason.BIRTH) }
+    var criadorName by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var sireId by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<String?>(null) }
+    var damId by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<String?>(null) }
+    var externalSireFolio by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var externalDamFolio by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf("") }
+    var lifeStage by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(LifeStage.ADULT) }
+    var reproductiveStatus by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(ReproductiveStatus.EMPTY) }
 
-    var localPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
-    var photoSizeBytes by rememberSaveable { mutableStateOf<Int?>(null) }
-    var photoS3Key by rememberSaveable { mutableStateOf<String?>(null) }
+    var localPhotoPath by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<String?>(null) }
+    var photoSizeBytes by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<Int?>(null) }
+    var photoS3Key by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<String?>(null) }
     var draftCreatedPhotos by rememberSaveable(
+        ranchId,
+        animalIdToEdit,
         stateSaver = listSaver(save = { it }, restore = { it })
     ) { mutableStateOf(emptyList<String>()) }
-    var committedPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var committedPhotoPath by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<String?>(null) }
     var hasLoadedExisting by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(false) }
     var isCompressingPhoto by remember { mutableStateOf(false) }
 
     var damsList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var siresList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
-    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var errorMessage by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf<String?>(null) }
     val isSaving = saveState is AnimalSaveUiState.Saving && saveState.draftKey == draftKey
     var isLoadingExisting by remember { mutableStateOf(true) }
     var initLoadFailed by remember { mutableStateOf(false) }
@@ -148,6 +151,7 @@ fun AnimalFormScreen(
 
     var breedExpanded by remember { mutableStateOf(false) }
     var lifeStageExpanded by remember { mutableStateOf(false) }
+    var reproExpanded by remember { mutableStateOf(false) }
     var reasonExpanded by remember { mutableStateOf(false) }
     var damExpanded by remember { mutableStateOf(false) }
     var sireExpanded by remember { mutableStateOf(false) }
@@ -158,14 +162,17 @@ fun AnimalFormScreen(
                 if (saveState.draftKey == draftKey) {
                     val previousCommitted = committedPhotoPath
                     committedPhotoPath = saveState.localPhotoPath
-                    draftCreatedPhotos
-                        .filter { it != saveState.localPhotoPath && it != committedPhotoPath }
-                        .forEach { obsolete -> deletePendingPhotoIfOwned(context.filesDir, obsolete) }
-                    if (previousCommitted != null &&
+                    val obsoleteDrafts = draftCreatedPhotos.filter {
+                        it != saveState.localPhotoPath && it != committedPhotoPath
+                    }
+                    val deletePrev = previousCommitted != null &&
                         previousCommitted != saveState.localPhotoPath &&
                         !commandRepository.isLocalPhotoReferencedByPendingSync(previousCommitted)
-                    ) {
-                        deletePendingPhotoIfOwned(context.filesDir, previousCommitted)
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        obsoleteDrafts.forEach { deletePendingPhotoIfOwned(context.filesDir, it) }
+                        if (deletePrev) {
+                            deletePendingPhotoIfOwned(context.filesDir, previousCommitted)
+                        }
                     }
                     draftCreatedPhotos = emptyList()
                     onResetSaveState()
@@ -183,12 +190,13 @@ fun AnimalFormScreen(
     }
 
     val handleCancelAndCleanup: () -> Unit = {
-        draftCreatedPhotos
-            .filter { it != committedPhotoPath }
-            .forEach { path ->
-                deletePendingPhotoIfOwned(context.filesDir, path)
-            }
+        val toDelete = draftCreatedPhotos.filter { it != committedPhotoPath }
         draftCreatedPhotos = emptyList()
+        if (toDelete.isNotEmpty()) {
+            scope.launch(NonCancellable + Dispatchers.IO) {
+                toDelete.forEach { deletePendingPhotoIfOwned(context.filesDir, it) }
+            }
+        }
         onResetSaveState()
         onNavigateBack()
     }
@@ -210,7 +218,7 @@ fun AnimalFormScreen(
             siresList = commandRepository.getPotentialSires(ranchId)
 
             if (animalIdToEdit != null && !hasLoadedExisting) {
-                val existing = commandRepository.getAnimalById(animalIdToEdit)
+                val existing = commandRepository.getAnimalById(animalIdToEdit, ranchId)
                 if (existing != null) {
                     folioInterno = existing.folioInterno
                     siniigaChip = existing.siniigaChip ?: ""
@@ -277,18 +285,29 @@ fun AnimalFormScreen(
                         photoFile.absolutePath to compressedBytes.size
                     }
                     val (newPath, compressedSize) = result
-                    if (localPhotoPath != committedPhotoPath) {
-                        deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                    val prevLocal = localPhotoPath
+                    if (prevLocal != null && prevLocal != committedPhotoPath) {
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            deletePendingPhotoIfOwned(context.filesDir, prevLocal)
+                        }
                     }
-                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath } + newPath
+                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == prevLocal } + newPath
                     localPhotoPath = newPath
                     photoSizeBytes = compressedSize
                     photoS3Key = null
                 } catch (e: CancellationException) {
-                    createdFile?.let { deletePendingPhotoIfOwned(context.filesDir, it.absolutePath) }
+                    createdFile?.let { file ->
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            deletePendingPhotoIfOwned(context.filesDir, file.absolutePath)
+                        }
+                    }
                     throw e
                 } catch (e: Exception) {
-                    createdFile?.let { deletePendingPhotoIfOwned(context.filesDir, it.absolutePath) }
+                    createdFile?.let { file ->
+                        withContext(NonCancellable + Dispatchers.IO) {
+                            deletePendingPhotoIfOwned(context.filesDir, file.absolutePath)
+                        }
+                    }
                     errorMessage = "Error procesando fotografía: ${e.message}"
                 } finally {
                     isCompressingPhoto = false
@@ -321,17 +340,17 @@ fun AnimalFormScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(BaappBackground)
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = BaappPrimaryGreen)
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         } else if (recordNotFound) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(BaappBackground)
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(innerPadding)
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
@@ -342,13 +361,13 @@ fun AnimalFormScreen(
                 ) {
                     Text(
                         text = errorMessage ?: "El ejemplar solicitado no está disponible.",
-                        color = Color(0xFFB71C1C),
+                        color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Button(
                         onClick = handleCancelAndCleanup,
                         modifier = Modifier.heightIn(min = 56.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
                         Text("← Volver")
                     }
@@ -358,7 +377,7 @@ fun AnimalFormScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(BaappBackground)
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(innerPadding)
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
@@ -369,13 +388,13 @@ fun AnimalFormScreen(
                 ) {
                     Text(
                         text = errorMessage ?: "Error al cargar los datos del formulario.",
-                        color = Color(0xFFB71C1C),
+                        color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Button(
                         onClick = { initRetryTrigger++ },
                         modifier = Modifier.heightIn(min = 56.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
                         Text("Reintentar")
                     }
@@ -385,7 +404,7 @@ fun AnimalFormScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(BaappBackground)
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(innerPadding)
                     .padding(16.dp)
                     .verticalScroll(scrollState),
@@ -399,7 +418,7 @@ fun AnimalFormScreen(
                     ) {
                         Text(
                             text = errorMessage!!,
-                            color = Color(0xFFB71C1C),
+                            color = Color(FieldPalette.ALERT),
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                             modifier = Modifier.padding(12.dp)
                         )
@@ -410,7 +429,7 @@ fun AnimalFormScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("1. Identificación Principal", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
@@ -462,7 +481,7 @@ fun AnimalFormScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("2. Sexo y Características", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
@@ -470,7 +489,12 @@ fun AnimalFormScreen(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(
                                 selected = sex == Sex.FEMALE,
-                                onClick = { sex = Sex.FEMALE },
+                                onClick = {
+                                    sex = Sex.FEMALE
+                                    if (reproductiveStatus == ReproductiveStatus.STUD_RAM) {
+                                        reproductiveStatus = ReproductiveStatus.EMPTY
+                                    }
+                                },
                                 label = { Text("♀ Hembra") },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = BaappFemalePinkBg,
@@ -480,7 +504,17 @@ fun AnimalFormScreen(
                             )
                             FilterChip(
                                 selected = sex == Sex.MALE,
-                                onClick = { sex = Sex.MALE },
+                                onClick = {
+                                    sex = Sex.MALE
+                                    if (lifeStage == LifeStage.EWE_REPLACEMENT) {
+                                        lifeStage = LifeStage.ADULT
+                                    }
+                                    if (reproductiveStatus == ReproductiveStatus.PREGNANT ||
+                                        reproductiveStatus == ReproductiveStatus.LACTATING
+                                    ) {
+                                        reproductiveStatus = ReproductiveStatus.EMPTY
+                                    }
+                                },
                                 label = { Text("♂ Macho (Semental)") },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = BaappMaleBlueBg,
@@ -502,7 +536,7 @@ fun AnimalFormScreen(
                                 readOnly = true,
                                 label = { Text("Raza") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = breedExpanded) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             )
                             ExposedDropdownMenu(
@@ -532,6 +566,11 @@ fun AnimalFormScreen(
                         )
 
                         // Etapa de Vida Dropdown
+                        val allowedStages = if (sex == Sex.MALE) {
+                            LifeStage.entries.filter { it != LifeStage.EWE_REPLACEMENT }
+                        } else {
+                            LifeStage.entries
+                        }
                         ExposedDropdownMenuBox(
                             expanded = lifeStageExpanded,
                             onExpandedChange = { lifeStageExpanded = it },
@@ -543,19 +582,55 @@ fun AnimalFormScreen(
                                 readOnly = true,
                                 label = { Text("Etapa de Vida") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = lifeStageExpanded) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             )
                             ExposedDropdownMenu(
                                 expanded = lifeStageExpanded,
                                 onDismissRequest = { lifeStageExpanded = false }
                             ) {
-                                LifeStage.entries.forEach { stage ->
+                                allowedStages.forEach { stage ->
                                     DropdownMenuItem(
                                         text = { Text(lifeStageLabel(stage)) },
                                         onClick = {
                                             lifeStage = stage
                                             lifeStageExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Estado Reproductivo Dropdown
+                        val allowedRepro = if (sex == Sex.MALE) {
+                            listOf(ReproductiveStatus.EMPTY, ReproductiveStatus.STUD_RAM)
+                        } else {
+                            listOf(ReproductiveStatus.EMPTY, ReproductiveStatus.PREGNANT, ReproductiveStatus.LACTATING)
+                        }
+                        ExposedDropdownMenuBox(
+                            expanded = reproExpanded,
+                            onExpandedChange = { reproExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = reproductiveStatusLabel(reproductiveStatus),
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Estado Reproductivo") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = reproExpanded) },
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            ExposedDropdownMenu(
+                                expanded = reproExpanded,
+                                onDismissRequest = { reproExpanded = false }
+                            ) {
+                                allowedRepro.forEach { status ->
+                                    DropdownMenuItem(
+                                        text = { Text(reproductiveStatusLabel(status)) },
+                                        onClick = {
+                                            reproductiveStatus = status
+                                            reproExpanded = false
                                         }
                                     )
                                 }
@@ -568,7 +643,7 @@ fun AnimalFormScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("3. Origen, Fechas y Criador", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
@@ -601,12 +676,12 @@ fun AnimalFormScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             OutlinedTextField(
-                                value = entryReason.name,
+                                value = entryReasonLabel(entryReason),
                                 onValueChange = {},
                                 readOnly = true,
                                 label = { Text("Motivo de Ingreso") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = reasonExpanded) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             )
                             ExposedDropdownMenu(
@@ -615,7 +690,7 @@ fun AnimalFormScreen(
                             ) {
                                 AnimalCatalogs.ENTRY_REASONS.forEach { r ->
                                     DropdownMenuItem(
-                                        text = { Text(r.name) },
+                                        text = { Text(entryReasonLabel(r)) },
                                         onClick = {
                                             entryReason = r
                                             reasonExpanded = false
@@ -641,13 +716,13 @@ fun AnimalFormScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("4. Genealogía", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
 
                         val selectedDamFolio = damsList.firstOrNull { it.first == damId }?.second
-                            ?: if (damId != null) damId!! else "Ninguna / Externa"
+                            ?: if (damId != null) "Madre registrada" else "Ninguna / Externa"
                         ExposedDropdownMenuBox(
                             expanded = damExpanded,
                             onExpandedChange = { damExpanded = it },
@@ -659,7 +734,7 @@ fun AnimalFormScreen(
                                 readOnly = true,
                                 label = { Text("Madre en Rebaño (Interna)") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = damExpanded) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             )
                             ExposedDropdownMenu(
@@ -680,6 +755,7 @@ fun AnimalFormScreen(
                                             text = { Text(folio) },
                                             onClick = {
                                                 damId = id
+                                                externalDamFolio = ""
                                                 damExpanded = false
                                             }
                                         )
@@ -689,7 +765,10 @@ fun AnimalFormScreen(
 
                         OutlinedTextField(
                             value = externalDamFolio,
-                            onValueChange = { externalDamFolio = it },
+                            onValueChange = {
+                                externalDamFolio = it
+                                if (it.isNotBlank()) damId = null
+                            },
                             label = { Text("Madre Externa (Folio Externo)") },
                             placeholder = { Text("Ej. MADRE-EXT-01") },
                             singleLine = true,
@@ -698,7 +777,7 @@ fun AnimalFormScreen(
                         )
 
                         val selectedSireFolio = siresList.firstOrNull { it.first == sireId }?.second
-                            ?: if (sireId != null) sireId!! else "Ninguno / Externo"
+                            ?: if (sireId != null) "Semental registrado" else "Ninguno / Externo"
                         ExposedDropdownMenuBox(
                             expanded = sireExpanded,
                             onExpandedChange = { sireExpanded = it },
@@ -710,7 +789,7 @@ fun AnimalFormScreen(
                                 readOnly = true,
                                 label = { Text("Semental en Rebaño (Interno)") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sireExpanded) },
-                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp)
                             )
                             ExposedDropdownMenu(
@@ -731,6 +810,7 @@ fun AnimalFormScreen(
                                             text = { Text(folio) },
                                             onClick = {
                                                 sireId = id
+                                                externalSireFolio = ""
                                                 sireExpanded = false
                                             }
                                         )
@@ -740,7 +820,10 @@ fun AnimalFormScreen(
 
                         OutlinedTextField(
                             value = externalSireFolio,
-                            onValueChange = { externalSireFolio = it },
+                            onValueChange = {
+                                externalSireFolio = it
+                                if (it.isNotBlank()) sireId = null
+                            },
                             label = { Text("Semental Externo (Folio Externo)") },
                             placeholder = { Text("Ej. SEMENTAL-EXT-01") },
                             singleLine = true,
@@ -754,7 +837,7 @@ fun AnimalFormScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("5. Fotografía del Ejemplar", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
@@ -798,24 +881,27 @@ fun AnimalFormScreen(
                         if (localPhotoPath != null) {
                             Text(
                                 text = "Archivo local: ${localPhotoPath!!.substringAfterLast('/')}",
-                                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                             )
                         }
 
                         if (localPhotoPath != null || !photoS3Key.isNullOrBlank()) {
                             TextButton(
                                 onClick = {
-                                    if (localPhotoPath != committedPhotoPath) {
-                                        deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                                    val toRemove = localPhotoPath
+                                    if (toRemove != null && toRemove != committedPhotoPath) {
+                                        scope.launch(NonCancellable + Dispatchers.IO) {
+                                            deletePendingPhotoIfOwned(context.filesDir, toRemove)
+                                        }
                                     }
-                                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == localPhotoPath }
+                                    draftCreatedPhotos = draftCreatedPhotos.filterNot { it == toRemove }
                                     localPhotoPath = null
                                     photoSizeBytes = null
                                     photoS3Key = null
                                 },
                                 enabled = !isCompressingPhoto && !isSaving
                             ) {
-                                Text("Quitar Foto", color = Color(0xFFB71C1C))
+                                Text("Quitar Foto", color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -881,6 +967,21 @@ private fun lifeStageLabel(stage: LifeStage): String = when (stage) {
     LifeStage.EWE_REPLACEMENT -> "Recría / Reemplazo"
 }
 
+private fun reproductiveStatusLabel(status: ReproductiveStatus): String = when (status) {
+    ReproductiveStatus.EMPTY -> "Vacía / Inactivo"
+    ReproductiveStatus.PREGNANT -> "Gestante"
+    ReproductiveStatus.LACTATING -> "Lactando"
+    ReproductiveStatus.STUD_RAM -> "Semental Activo"
+}
+
+private fun entryReasonLabel(reason: EntryReason): String = when (reason) {
+    EntryReason.BIRTH -> "Nacimiento"
+    EntryReason.PURCHASE -> "Compra"
+    EntryReason.REENTRY -> "Reingreso"
+    EntryReason.TRANSFER -> "Traslado"
+    EntryReason.OTHER -> "Otro"
+}
+
 private fun readBoundedPhotoBytes(inputStream: InputStream, maxBytes: Int): ByteArray {
     val buffer = ByteArray(8 * 1024)
     val output = ByteArrayOutputStream()
@@ -899,9 +1000,11 @@ private fun readBoundedPhotoBytes(inputStream: InputStream, maxBytes: Int): Byte
 
 private fun deletePendingPhotoIfOwned(filesDir: File, path: String?) {
     if (path.isNullOrBlank()) return
-    val ownedDir = File(filesDir, PENDING_PHOTOS_DIR_NAME).canonicalFile
-    val target = File(path).canonicalFile
-    if (target.parentFile == ownedDir && target.exists()) {
-        target.delete()
+    runCatching {
+        val ownedDir = File(filesDir, PENDING_PHOTOS_DIR_NAME).canonicalFile
+        val target = File(path).canonicalFile
+        if (target.parentFile == ownedDir && target.isFile) {
+            target.delete()
+        }
     }
 }

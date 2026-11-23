@@ -94,16 +94,6 @@ CREATE INDEX idx_pending_sync_events_status_sequence ON pending_sync_events (syn
 -- MAX(sequence) en cada inserción: con sequence a la izquierda SQLite lo resuelve sin recorrer el historial.
 CREATE INDEX idx_pending_sync_events_sequence ON pending_sync_events (sequence);
 
-insertPendingSyncEvent:
-INSERT INTO pending_sync_events (
-    mutation_id, entity_type, operation, occurred_at,
-    payload_json, local_photo_path, sync_status, sequence
-) VALUES (
-    ?, ?, ?, ?,
-    ?, ?, ?,
-    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events)
-);
-
 -- Queries: sync
 insertSyncEvent:
 INSERT INTO pending_sync_events (
@@ -122,6 +112,10 @@ countPendingSyncEvents:
 SELECT COUNT(*) FROM pending_sync_events
 WHERE sync_status = 'PENDING';
 
+countPendingSyncEventsByLocalPhoto:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status != 'SYNCED' AND local_photo_path = :localPhotoPath;
+
 -- Filas cambiadas por el último INSERT/UPDATE de esta conexión (para writeAndEnqueueIfChanged).
 changedRows:
 SELECT changes();
@@ -129,13 +123,12 @@ SELECT changes();
 selectLatestLocalPhotoByAnimalId:
 SELECT local_photo_path FROM pending_sync_events
 WHERE entity_type = 'ANIMAL'
-  AND payload_json LIKE ('%"id":"' || :animalId || '"%')
+  AND (
+    payload_json LIKE ('%"id":"' || :animalId || '"%') ESCAPE '\' OR
+    payload_json LIKE ('%"animalId":"' || :animalId || '"%') ESCAPE '\'
+  )
 ORDER BY sequence DESC
 LIMIT 1;
-
-countPendingSyncEventsByPhotoPath:
-SELECT COUNT(*) FROM pending_sync_events
-WHERE sync_status = 'PENDING' AND local_photo_path = :localPhotoPath;
 
 markSyncEventCompleted:
 UPDATE pending_sync_events
@@ -177,18 +170,18 @@ SELECT
         SELECT wm.scrotal_circumference_cm
         FROM local_weight_measurements wm
         WHERE wm.animal_id = a.id AND wm.scrotal_circumference_cm IS NOT NULL
-        ORDER BY wm.measurement_date DESC
+        ORDER BY wm.measurement_date DESC, wm.id DESC
         LIMIT 1
     ) AS latest_scrotal_circumference_cm,
     (
         SELECT COUNT(*)
         FROM local_animals c
-        WHERE c.sire_id = a.id AND c.status != 'DECEASED'
+        WHERE c.sire_id = a.id AND c.ranch_id = a.ranch_id AND c.status = 'ACTIVE'
     ) AS active_offspring_count,
     (
         SELECT COUNT(*)
         FROM local_animals c
-        WHERE c.sire_id = a.id
+        WHERE c.sire_id = a.id AND c.ranch_id = a.ranch_id
     ) AS total_offspring_count
 FROM local_animals a
 WHERE a.ranch_id = :ranchId
@@ -245,9 +238,19 @@ selectAnimalByFolio:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND folio_interno = :folioInterno;
 
+selectAnimalBySiniigaChip:
+SELECT id FROM local_animals
+WHERE siniiga_chip = :siniigaChip
+LIMIT 1;
+
 selectOffspringByParent:
 SELECT * FROM local_animals
 WHERE dam_id = :parentId OR sire_id = :parentId
+ORDER BY birth_date DESC;
+
+selectOffspringByParentInRanch:
+SELECT * FROM local_animals
+WHERE ranch_id = :ranchId AND (dam_id = :parentId OR sire_id = :parentId)
 ORDER BY birth_date DESC;
 
 insertAnimal:

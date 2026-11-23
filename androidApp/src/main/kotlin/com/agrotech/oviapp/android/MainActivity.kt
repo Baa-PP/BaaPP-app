@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,7 +36,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -67,8 +67,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-private val BaappPrimaryGreen = Color(0xFF1B5E20)
 
 class MainActivity : ComponentActivity() {
 
@@ -171,9 +169,13 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     getApplication<Application>().deleteSharedPreferences("baapp_secure_session_prefs")
                 }
                 if (deleted) {
-                    cachedAuthRepository?.close()
-                    cachedAuthRepository = null
-                    cachedCommandRepository = null
+                    val authToClose = synchronized(lifecycleLock) {
+                        val auth = cachedAuthRepository
+                        cachedAuthRepository = null
+                        cachedCommandRepository = null
+                        auth
+                    }
+                    authToClose?.close()
                     initializeInternal()
                 } else {
                     state = InitialState.Error("No se pudo restablecer el almacenamiento seguro.")
@@ -235,12 +237,16 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     if (isCleared) return@withContext null
                     val db = cachedDatabase ?: OviAppDatabase(driver).also { cachedDatabase = it }
                     val inv = cachedInventoryRepository
-                        ?: SqlDelightAnimalInventoryRepository(db).also {
+                        ?: SqlDelightAnimalInventoryRepository(
+                            database = db,
+                            ioDispatcher = Dispatchers.IO
+                        ).also {
                             cachedInventoryRepository = it
                         }
                     val cmd = cachedCommandRepository
                         ?: SqlDelightAnimalCommandRepository(
                             database = db,
+                            ioDispatcher = Dispatchers.IO,
                             sessionStorage = sessionStorage
                         ).also {
                             cachedCommandRepository = it
@@ -316,12 +322,12 @@ private fun MainApp(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFFF7F9F7)),
+                    .background(MaterialTheme.colorScheme.background),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(48.dp),
-                    color = BaappPrimaryGreen,
+                    color = MaterialTheme.colorScheme.primary,
                     strokeWidth = 3.dp
                 )
             }
@@ -342,14 +348,14 @@ private fun MainApp(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xFFF7F9F7))
+                    .background(MaterialTheme.colorScheme.background)
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
@@ -360,13 +366,15 @@ private fun MainApp(
                             text = "Aviso de Almacenamiento",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFB71C1C)
+                                color = MaterialTheme.colorScheme.error
                             )
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = state.message,
-                            style = MaterialTheme.typography.bodyMedium.copy(color = Color.DarkGray),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(20.dp))
@@ -377,9 +385,12 @@ private fun MainApp(
                                 .fillMaxWidth()
                                 .height(48.dp),
                             shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
                         ) {
-                            Text("Reintentar Inicio", color = Color.White)
+                            Text("Reintentar Inicio")
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
@@ -390,7 +401,7 @@ private fun MainApp(
                                 .height(48.dp),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Restablecer Sesión", color = Color(0xFFB71C1C))
+                            Text("Restablecer Sesión", color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -493,13 +504,16 @@ fun AppNavigation(
                         listState = inventoryListState
                     )
                 } else {
-                    currentScreen = AppScreen.Home
+                    LaunchedEffect(screen, currentRanchId, capabilities.canReadInventory) {
+                        currentScreen = AppScreen.Home
+                    }
                 }
             }
             is AppScreen.AnimalDetail -> {
                 if (!currentRanchId.isNullOrBlank() && capabilities.canReadInventory) {
                     AnimalDetailScreen(
                         animalId = screen.animalId,
+                        ranchId = currentRanchId,
                         inventoryRepository = inventoryRepository,
                         onBackClick = {
                             if (detailBackStack.isNotEmpty()) {
@@ -526,8 +540,10 @@ fun AppNavigation(
                         }
                     )
                 } else {
-                    detailBackStack = emptyList()
-                    currentScreen = AppScreen.Home
+                    LaunchedEffect(screen, currentRanchId, capabilities.canReadInventory) {
+                        detailBackStack = emptyList()
+                        currentScreen = AppScreen.Home
+                    }
                 }
             }
             is AppScreen.AnimalForm -> {
@@ -555,8 +571,14 @@ fun AppNavigation(
                         }
                     )
                 } else {
-                    returnToDetailId = null
-                    currentScreen = if (screen.animalId != null) AppScreen.Inventory else AppScreen.Home
+                    LaunchedEffect(screen, currentRanchId, canOpenForm) {
+                        returnToDetailId = null
+                        currentScreen = if (screen.animalId != null && capabilities.canReadInventory) {
+                            AppScreen.Inventory
+                        } else {
+                            AppScreen.Home
+                        }
+                    }
                 }
             }
             is AppScreen.Home -> {
@@ -564,6 +586,7 @@ fun AppNavigation(
                     session = session!!,
                     onLogoutClick = {
                         authRepository.logout()
+                        onResetAnimalSaveState()
                         onSessionChange(null)
                         detailBackStack = emptyList()
                         returnToDetailId = null

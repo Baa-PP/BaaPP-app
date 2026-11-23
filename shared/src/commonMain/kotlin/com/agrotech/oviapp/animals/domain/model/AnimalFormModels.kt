@@ -71,6 +71,23 @@ data class AnimalFormState(
         if (!SiniigaValidator.isValid(siniigaChip)) {
             return "El chip SINIIGA debe tener entre 10 y 15 dígitos numéricos iniciando con 484."
         }
+        if (sex == Sex.MALE && lifeStage == LifeStage.EWE_REPLACEMENT) {
+            return "Un macho no puede registrarse en etapa de reemplazo de hembra."
+        }
+        if (sex == Sex.FEMALE && reproductiveStatus == ReproductiveStatus.STUD_RAM) {
+            return "Una hembra no puede tener estado reproductivo de semental."
+        }
+        if (sex == Sex.MALE &&
+            (reproductiveStatus == ReproductiveStatus.PREGNANT || reproductiveStatus == ReproductiveStatus.LACTATING)
+        ) {
+            return "Un macho no puede tener estado reproductivo gestante o lactando."
+        }
+        if (!damId.isNullOrBlank() && !externalDamFolio.isNullOrBlank()) {
+            return "Selecciona una madre del rebaño o captura un folio externo, no ambos."
+        }
+        if (!sireId.isNullOrBlank() && !externalSireFolio.isNullOrBlank()) {
+            return "Selecciona un semental del rebaño o captura un folio externo, no ambos."
+        }
         return null
     }
 
@@ -82,7 +99,7 @@ data class AnimalFormState(
             val year = match.groupValues[1].toIntOrNull() ?: return false
             val month = match.groupValues[2].toIntOrNull() ?: return false
             val day = match.groupValues[3].toIntOrNull() ?: return false
-            if (month !in 1..12) return false
+            if (year !in 1900..9999 || month !in 1..12) return false
             val isLeapYear = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
             val maxDay = when (month) {
                 1, 3, 5, 7, 8, 10, 12 -> 31

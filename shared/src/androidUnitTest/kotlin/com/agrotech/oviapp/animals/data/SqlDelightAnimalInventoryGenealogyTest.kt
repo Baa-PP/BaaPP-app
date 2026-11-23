@@ -11,6 +11,7 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
 import kotlinx.coroutines.test.runTest
+import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -20,15 +21,21 @@ import kotlin.test.assertTrue
 
 class SqlDelightAnimalInventoryGenealogyTest {
 
+    private lateinit var driver: JdbcSqliteDriver
     private lateinit var database: OviAppDatabase
     private lateinit var repository: SqlDelightAnimalInventoryRepository
 
     @BeforeTest
     fun setup() {
-        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
         repository = SqlDelightAnimalInventoryRepository(database)
+    }
+
+    @AfterTest
+    fun tearDown() {
+        driver.close()
     }
 
     @Test
@@ -128,23 +135,21 @@ class SqlDelightAnimalInventoryGenealogyTest {
             lifeStage = LifeStage.ADULT,
             birthDate = "2024-02-01"
         )
-        database.oviAppDatabaseQueries.insertPendingSyncEvent(
+        database.oviAppDatabaseQueries.insertSyncEvent(
             mutation_id = UuidV7.generate(),
             entity_type = "ANIMAL",
             operation = "CREATE",
             occurred_at = "2026-11-22T10:00:00Z",
             payload_json = """{"id":"$animalId","folioInterno":"FOTO-01"}""",
-            local_photo_path = "/data/user/0/app/files/pending_animal_photos/first.jpg",
-            sync_status = "PENDING"
+            local_photo_path = "/data/user/0/app/files/pending_animal_photos/first.jpg"
         )
-        database.oviAppDatabaseQueries.insertPendingSyncEvent(
+        database.oviAppDatabaseQueries.insertSyncEvent(
             mutation_id = UuidV7.generate(),
             entity_type = "ANIMAL",
             operation = "UPDATE",
             occurred_at = "2026-11-22T12:00:00Z",
-            payload_json = """{"id":"$animalId","folioInterno":"FOTO-01"}""",
-            local_photo_path = "/data/user/0/app/files/pending_animal_photos/latest.jpg",
-            sync_status = "PENDING"
+            payload_json = """{"animalId":"$animalId","folioInterno":"FOTO-01"}""",
+            local_photo_path = "/data/user/0/app/files/pending_animal_photos/latest.jpg"
         )
 
         val detail = repository.getAnimalGenealogy(animalId)
@@ -152,18 +157,48 @@ class SqlDelightAnimalInventoryGenealogyTest {
         assertEquals("/data/user/0/app/files/pending_animal_photos/latest.jpg", detail.localPhotoPath)
 
         // A newer event with local_photo_path = null supersedes the older attachment
-        database.oviAppDatabaseQueries.insertPendingSyncEvent(
+        database.oviAppDatabaseQueries.insertSyncEvent(
             mutation_id = UuidV7.generate(),
             entity_type = "ANIMAL",
             operation = "UPDATE",
             occurred_at = "2026-11-22T14:00:00Z",
-            payload_json = """{"id":"$animalId","folioInterno":"FOTO-01"}""",
-            local_photo_path = null,
-            sync_status = "PENDING"
+            payload_json = """{"animalId":"$animalId","folioInterno":"FOTO-01"}""",
+            local_photo_path = null
         )
         val removedDetail = repository.getAnimalGenealogy(animalId)
         assertNotNull(removedDetail)
         assertNull(removedDetail.localPhotoPath)
+    }
+
+    @Test
+    fun testGetAnimalGenealogyIsolatesByRanchId() = runTest {
+        val damId = UuidV7.generate()
+        val foreignChildId = UuidV7.generate()
+        insertAnimal(
+            id = damId,
+            ranchId = "ranch-1",
+            folio = "DAM-R1",
+            sex = Sex.FEMALE,
+            lifeStage = LifeStage.ADULT,
+            birthDate = "2022-01-01"
+        )
+        insertAnimal(
+            id = foreignChildId,
+            ranchId = "ranch-2",
+            folio = "CHILD-R2",
+            sex = Sex.FEMALE,
+            lifeStage = LifeStage.LAMB_LACTATING,
+            birthDate = "2026-01-01",
+            damId = damId
+        )
+
+        assertNull(repository.getAnimalGenealogy(damId, ranchId = "ranch-2"))
+        val r1Detail = repository.getAnimalGenealogy(damId, ranchId = "ranch-1")
+        assertNotNull(r1Detail)
+        assertTrue(r1Detail.offspring.isEmpty(), "Foreign-ranch offspring must not leak into ranch-1 genealogy")
+        val r2Detail = repository.getAnimalGenealogy(foreignChildId, ranchId = "ranch-2")
+        assertNotNull(r2Detail)
+        assertNull(r2Detail.dam, "Foreign-ranch dam must not leak into ranch-2 genealogy")
     }
 
     @Test

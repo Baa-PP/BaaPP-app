@@ -31,5 +31,8 @@ interface AnimalInventoryRepository {
         offset: Long = 0
     ): List<LambInventoryItem>
 
-    suspend fun getAnimalGenealogy(animalId: String): AnimalDetailWithGenealogy?
+    suspend fun getAnimalGenealogy(
+        animalId: String,
+        ranchId: String? = null
+    ): AnimalDetailWithGenealogy?
 }

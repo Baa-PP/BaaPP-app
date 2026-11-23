@@ -14,6 +14,7 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
 import kotlinx.coroutines.test.runTest
+import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,15 +24,21 @@ import kotlin.test.assertTrue
 
 class SqlDelightAnimalInventoryRepositoryTest {
 
+    private lateinit var driver: JdbcSqliteDriver
     private lateinit var database: OviAppDatabase
     private lateinit var repository: SqlDelightAnimalInventoryRepository
 
     @BeforeTest
     fun setup() {
-        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         OviAppDatabase.Schema.create(driver)
         database = OviAppDatabase(driver)
         repository = SqlDelightAnimalInventoryRepository(database)
+    }
+
+    @AfterTest
+    fun tearDown() {
+        driver.close()
     }
 
     private fun insertTestAnimal(
@@ -190,6 +197,14 @@ class SqlDelightAnimalInventoryRepositoryTest {
             status = AnimalStatus.DECEASED,
             sireId = ramId
         )
+        insertTestAnimal(
+            folioInterno = "LAMB-4-SOLD",
+            sex = Sex.MALE,
+            lifeStage = LifeStage.LAMB_FATTENING,
+            reproductiveStatus = ReproductiveStatus.EMPTY,
+            status = AnimalStatus.SOLD,
+            sireId = ramId
+        )
 
         val rams = repository.getRamsPaged(ranchId)
         assertEquals(1, rams.size)
@@ -197,7 +212,7 @@ class SqlDelightAnimalInventoryRepositoryTest {
         assertEquals("RAM-01", ram.folioInterno)
         assertEquals(36.5, ram.latestScrotalCircumferenceCm)
         assertEquals(2, ram.activeOffspringCount)
-        assertEquals(3, ram.totalOffspringCount)
+        assertEquals(4, ram.totalOffspringCount)
     }
 
     @Test

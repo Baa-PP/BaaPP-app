@@ -6,7 +6,7 @@ import com.agrotech.oviapp.domain.model.Animal
 
 interface AnimalCommandRepository {
     suspend fun saveAnimalOffline(formState: AnimalFormState): AnimalSaveResult
-    suspend fun getAnimalById(id: String): Animal?
+    suspend fun getAnimalById(id: String, ranchId: String? = null): Animal?
     suspend fun getLatestLocalPhotoPath(animalId: String): String? = null
     suspend fun isLocalPhotoReferencedByPendingSync(localPhotoPath: String): Boolean = false
     suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> // id to folioInterno

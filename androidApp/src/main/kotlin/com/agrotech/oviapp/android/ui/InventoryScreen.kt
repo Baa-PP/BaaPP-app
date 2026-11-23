@@ -50,7 +50,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -61,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.agrotech.oviapp.android.ui.theme.FieldPalette
 import com.agrotech.oviapp.animals.domain.model.EweInventoryItem
 import com.agrotech.oviapp.animals.domain.model.InventoryTab
 import com.agrotech.oviapp.animals.domain.model.LambInventoryItem
@@ -71,28 +71,29 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 
-private val BaappPrimaryGreen = Color(0xFF1B5E20)
-private val BaappBackground = Color(0xFFF7F9F7)
+private val BaappPrimaryGreen = Color(FieldPalette.PASTURE)
 private val BaappSoftGreen = Color(0xFFE8F5E9)
-private val BaappFemalePink = Color(0xFFD81B60)
-private val BaappFemalePinkBg = Color(0xFFFCE4EC)
-private val BaappMaleBlue = Color(0xFF1565C0)
-private val BaappMaleBlueBg = Color(0xFFE3F2FD)
+private val BaappFemalePink = Color(FieldPalette.FEMALE)
+private val BaappFemalePinkBg = Color(FieldPalette.FEMALE_CONTAINER)
+private val BaappMaleBlue = Color(FieldPalette.MALE)
+private val BaappMaleBlueBg = Color(FieldPalette.MALE_CONTAINER)
 
 private data class PaginationTag(
+    val ranchId: String,
     val tab: InventoryTab,
     val query: String,
     val reproductiveStatus: ReproductiveStatus?,
     val lifeStage: LifeStage?
 ) {
     fun matches(
+        currentRanchId: String,
         currentTab: InventoryTab,
         currentQuery: String,
         currentReproductiveStatus: ReproductiveStatus?,
         currentLifeStage: LifeStage?
-    ): Boolean = tab == currentTab &&
+    ): Boolean = ranchId == currentRanchId &&
+        tab == currentTab &&
         query == currentQuery &&
         reproductiveStatus == currentReproductiveStatus &&
         lifeStage == currentLifeStage
@@ -118,7 +119,8 @@ fun InventoryScreen(
     modifier: Modifier = Modifier
 ) {
     val tabs = remember { InventoryTab.entries }
-    val currentTab = tabs[selectedTabIndex.coerceIn(0, tabs.lastIndex)]
+    val safeTabIndex = selectedTabIndex.coerceIn(0, tabs.lastIndex)
+    val currentTab = tabs[safeTabIndex]
 
     var ewesList by remember { mutableStateOf<List<EweInventoryItem>>(emptyList()) }
     var ramsList by remember { mutableStateOf<List<RamInventoryItem>>(emptyList()) }
@@ -133,13 +135,12 @@ fun InventoryScreen(
     var currentOffset by remember { mutableStateOf(0L) }
     val pageSize = 50L
 
-    val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
     BackHandler(onBack = onBackClick)
 
-    // Reload list when tab, search, or filters change (or initial load retry)
-    LaunchedEffect(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, initialRetryTrigger) {
+    // Reload list when ranch, tab, search, or filters change (or initial load retry)
+    LaunchedEffect(ranchId, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, initialRetryTrigger) {
         val requestGeneration = ++activeRequestGeneration
         isLoading = true
         loadError = null
@@ -198,8 +199,8 @@ fun InventoryScreen(
     }
 
     // Infinite scroll listener
-    LaunchedEffect(listState, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, paginationRetryTrigger) {
-        val requestTag = PaginationTag(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)
+    LaunchedEffect(ranchId, listState, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, paginationRetryTrigger) {
+        val requestTag = PaginationTag(ranchId, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
             val totalItems = layoutInfo.totalItemsCount
@@ -222,7 +223,7 @@ fun InventoryScreen(
                                 limit = pageSize,
                                 offset = fetchOffset
                             )
-                            if (requestTag.matches(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
+                            if (requestTag.matches(ranchId, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
                                 ewesList = ewesList + more
                                 canLoadMore = more.size.toLong() == pageSize
                                 currentOffset = fetchOffset + pageSize
@@ -235,7 +236,7 @@ fun InventoryScreen(
                                 limit = pageSize,
                                 offset = fetchOffset
                             )
-                            if (requestTag.matches(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
+                            if (requestTag.matches(ranchId, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
                                 ramsList = ramsList + more
                                 canLoadMore = more.size.toLong() == pageSize
                                 currentOffset = fetchOffset + pageSize
@@ -249,7 +250,7 @@ fun InventoryScreen(
                                 limit = pageSize,
                                 offset = fetchOffset
                             )
-                            if (requestTag.matches(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
+                            if (requestTag.matches(ranchId, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)) {
                                 lambsList = lambsList + more
                                 canLoadMore = more.size.toLong() == pageSize
                                 currentOffset = fetchOffset + pageSize
@@ -296,24 +297,24 @@ fun InventoryScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(BaappBackground)
+                .background(MaterialTheme.colorScheme.background)
                 .padding(innerPadding)
         ) {
             // TabRow with exactly 3 tabs: Hembras, Sementales, Crías (strictly Sementales terminology)
             TabRow(
-                selectedTabIndex = selectedTabIndex,
-                containerColor = Color.White,
-                contentColor = BaappPrimaryGreen,
+                selectedTabIndex = safeTabIndex,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary,
                 indicator = { tabPositions ->
                     TabRowDefaults.SecondaryIndicator(
-                        Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                        color = BaappPrimaryGreen
+                        Modifier.tabIndicatorOffset(tabPositions[safeTabIndex]),
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             ) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
-                        selected = selectedTabIndex == index,
+                        selected = safeTabIndex == index,
                         onClick = {
                             onSelectedTabIndexChange(index)
                             onSelectedReproductiveStatusChange(null)
@@ -322,7 +323,7 @@ fun InventoryScreen(
                         text = {
                             Text(
                                 text = tab.title,
-                                fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (safeTabIndex == index) FontWeight.Bold else FontWeight.Normal
                             )
                         },
                         modifier = Modifier.heightIn(min = 48.dp)
@@ -334,7 +335,7 @@ fun InventoryScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 OutlinedTextField(
@@ -528,7 +529,7 @@ private fun EweCard(ewe: EweInventoryItem, onCardClick: () -> Unit, onEditClick:
         onClick = onCardClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -556,10 +557,10 @@ private fun EweCard(ewe: EweInventoryItem, onCardClick: () -> Unit, onEditClick:
                 }
 
                 val (statusText, statusBg, statusColor) = when (ewe.reproductiveStatus) {
-                    ReproductiveStatus.EMPTY -> Triple("Vacía", Color(0xFFECEFF1), Color(0xFF455A64))
-                    ReproductiveStatus.PREGNANT -> Triple("Gestante", Color(0xFFFFF3E0), Color(0xFFE65100))
-                    ReproductiveStatus.LACTATING -> Triple("Lactando", Color(0xFFE8F5E9), Color(0xFF2E7D32))
-                    else -> Triple(ewe.reproductiveStatus.name, Color(0xFFECEFF1), Color.Gray)
+                    ReproductiveStatus.EMPTY -> Triple("Vacía", Color(0xFFECEFF1), Color(0xFF37474F))
+                    ReproductiveStatus.PREGNANT -> Triple("Gestante", Color(0xFFFFF3E0), Color(0xFFBF360C))
+                    ReproductiveStatus.LACTATING -> Triple("Lactando", Color(0xFFE8F5E9), Color(FieldPalette.PASTURE))
+                    else -> Triple(ewe.reproductiveStatus.name, Color(0xFFECEFF1), Color(FieldPalette.MUTED_INK))
                 }
 
                 Text(
@@ -575,13 +576,13 @@ private fun EweCard(ewe: EweInventoryItem, onCardClick: () -> Unit, onEditClick:
 
             Text(
                 text = "Raza: ${ewe.breed} · Color: ${ewe.color}",
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
             )
 
             if (!ewe.siniigaChip.isNullOrBlank()) {
                 Text(
                     text = "SINIIGA: ${ewe.siniigaChip}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
             }
 
@@ -594,7 +595,7 @@ private fun EweCard(ewe: EweInventoryItem, onCardClick: () -> Unit, onEditClick:
                         onClick = onEditClick,
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) {
-                        Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                        Text("Editar Ficha", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -608,7 +609,7 @@ private fun RamCard(ram: RamInventoryItem, onCardClick: () -> Unit, onEditClick:
         onClick = onCardClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -649,13 +650,13 @@ private fun RamCard(ram: RamInventoryItem, onCardClick: () -> Unit, onEditClick:
 
             Text(
                 text = "Raza: ${ram.breed} · Color: ${ram.color}",
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
             )
 
             if (!ram.siniigaChip.isNullOrBlank()) {
                 Text(
                     text = "SINIIGA: ${ram.siniigaChip}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
             }
 
@@ -667,11 +668,17 @@ private fun RamCard(ram: RamInventoryItem, onCardClick: () -> Unit, onEditClick:
             ) {
                 Text(
                     text = "Crías engendradas:",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium, color = Color.DarkGray)
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 )
                 Text(
                     text = "${ram.activeOffspringCount} activas (${ram.totalOffspringCount} total)",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = BaappPrimaryGreen)
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 )
             }
 
@@ -684,7 +691,7 @@ private fun RamCard(ram: RamInventoryItem, onCardClick: () -> Unit, onEditClick:
                         onClick = onEditClick,
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) {
-                        Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                        Text("Editar Ficha", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -710,7 +717,7 @@ private fun LambCard(lamb: LambInventoryItem, onCardClick: () -> Unit, onEditCli
         onClick = onCardClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -750,13 +757,13 @@ private fun LambCard(lamb: LambInventoryItem, onCardClick: () -> Unit, onEditCli
 
             Text(
                 text = "Raza: ${lamb.breed} · Color: ${lamb.color}",
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
             )
 
             if (!lamb.siniigaChip.isNullOrBlank()) {
                 Text(
                     text = "SINIIGA: ${lamb.siniigaChip}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
             }
 
@@ -769,7 +776,7 @@ private fun LambCard(lamb: LambInventoryItem, onCardClick: () -> Unit, onEditCli
                         onClick = onEditClick,
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) {
-                        Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                        Text("Editar Ficha", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -787,7 +794,7 @@ private fun EmptyInventoryView(message: String) {
     ) {
         Text(
             text = message,
-            style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray)
+            style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
         )
     }
 }

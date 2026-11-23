@@ -6,6 +6,7 @@ import com.agrotech.oviapp.animals.domain.repository.AnimalCommandRepository
 import com.agrotech.oviapp.auth.domain.RanchAccessPolicy
 import com.agrotech.oviapp.auth.domain.SessionStorage
 import com.agrotech.oviapp.db.OviAppDatabase
+import com.agrotech.oviapp.disposal.AnimalUpdatePayload
 import com.agrotech.oviapp.domain.model.Animal
 import com.agrotech.oviapp.domain.model.AnimalStatus
 import com.agrotech.oviapp.domain.model.ConceptionMethod
@@ -15,12 +16,46 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
 import com.agrotech.oviapp.domain.model.currentEpochMillis
+import com.agrotech.oviapp.sync.IsoTimestamp
+import com.agrotech.oviapp.sync.PendingSyncQueue
+import com.agrotech.oviapp.sync.SyncEntityType
+import com.agrotech.oviapp.sync.SyncOperation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+
+@Serializable
+private data class AnimalCreateSyncPayload(
+    val id: String,
+    val folioInterno: String,
+    val siniigaChip: String? = null,
+    val registroUno: String? = null,
+    val adn: String? = null,
+    val breed: String,
+    val color: String,
+    val sex: String,
+    val birthDate: String,
+    val weaningDate: String? = null,
+    val entryReason: String,
+    val criador: String? = null,
+    val parturitionType: String,
+    val conceptionMethod: String,
+    val sireId: String? = null,
+    val damId: String? = null,
+    val externalSireFolio: String? = null,
+    val externalDamFolio: String? = null,
+    val lifeStage: String,
+    val reproductiveStatus: String,
+    val status: String = AnimalStatus.ACTIVE.name,
+    val mortalityDate: String? = null,
+    val mortalityCause: String? = null,
+    val lifeStageAtDeath: String? = null,
+    val photoS3Key: String? = null,
+)
 
 class SqlDelightAnimalCommandRepository(
     private val database: OviAppDatabase,
@@ -29,7 +64,8 @@ class SqlDelightAnimalCommandRepository(
     private val sessionStorage: SessionStorage? = null
 ) : AnimalCommandRepository {
 
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val syncQueue = PendingSyncQueue(database = database, nowMillis = clockMillis)
 
     override suspend fun saveAnimalOffline(formState: AnimalFormState): AnimalSaveResult = withContext(ioDispatcher) {
         val validationError = formState.validate()
@@ -38,135 +74,217 @@ class SqlDelightAnimalCommandRepository(
         }
 
         val isEdit = !formState.id.isNullOrBlank()
-        val activeSession = if (sessionStorage != null) sessionStorage.getSession() else null
-        if (isEdit && sessionStorage != null) {
-            val canEdit = activeSession?.let { RanchAccessPolicy.resolveCapabilities(it).canEditGeneralRecords } ?: false
-            if (!canEdit) {
+        val activeSession = sessionStorage?.getSession()
+        if (sessionStorage != null) {
+            val capabilities = activeSession?.let(RanchAccessPolicy::resolveCapabilities)
+            val allowed = if (isEdit) capabilities?.canEditGeneralRecords == true else capabilities?.canCapture == true
+            if (!allowed) {
                 return@withContext AnimalSaveResult.ValidationError(
-                    "No tienes permiso para editar registros de ejemplares."
+                    if (isEdit) "No tienes permiso para editar registros de ejemplares."
+                    else "No tienes permiso para registrar nuevos ejemplares."
                 )
+            }
+            if (capabilities != null && !capabilities.isMultiRanchScope && activeSession?.ranchId != formState.ranchId) {
+                return@withContext AnimalSaveResult.Error("El ejemplar está fuera del rancho autorizado.")
             }
         }
 
         val targetFolio = formState.folioInterno.trim()
+        val cleanSiniiga = formState.siniigaChip?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanRegistroUno = formState.registroUno?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanAdn = formState.adn?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanColor = formState.color.trim()
+        val cleanBirthDate = formState.birthDate.trim()
+        val cleanWeaningDate = formState.weaningDate?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanExtSire = formState.externalSireFolio?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanExtDam = formState.externalDamFolio?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanCriador = formState.criadorName?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanSireId = formState.sireId?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanDamId = formState.damId?.trim()?.takeIf { it.isNotEmpty() }
+
         val animalId = if (isEdit) formState.id!! else UuidV7.generate()
-        val mutationId = UuidV7.generate()
-        val occurredAt = formatEpochMillisToIsoUtc(clockMillis())
-        val operation = if (isEdit) "UPDATE" else "CREATE"
+        val occurredAt = IsoTimestamp.format(clockMillis())
 
         try {
-            val result = database.transactionWithResult<AnimalSaveResult> {
-                val existingByFolio = database.oviAppDatabaseQueries
+            database.transactionWithResult<AnimalSaveResult> {
+                val queries = database.oviAppDatabaseQueries
+                val existingByFolio = queries
                     .selectAnimalByFolio(formState.ranchId, targetFolio)
                     .executeAsOneOrNull()
-
-                // Check duplicate folio locally inside transaction
                 if (existingByFolio != null && existingByFolio.id != animalId) {
                     return@transactionWithResult AnimalSaveResult.DuplicateFolio(
                         "Ya existe un ejemplar con el arete '$targetFolio' en este rancho."
                     )
                 }
 
-                var targetRanchId = formState.ranchId
-                if (isEdit) {
-                    val existingAnimal = database.oviAppDatabaseQueries
-                        .selectAnimalById(animalId)
-                        .executeAsOneOrNull()
-                    if (existingAnimal == null) {
-                        return@transactionWithResult AnimalSaveResult.Error(
-                            "No se encontró el ejemplar a editar."
+                if (cleanSiniiga != null) {
+                    val existingByChip = queries.selectAnimalBySiniigaChip(cleanSiniiga).executeAsOneOrNull()
+                    if (existingByChip != null && existingByChip != animalId) {
+                        return@transactionWithResult AnimalSaveResult.ValidationError(
+                            "Ya existe un ejemplar con el chip SINIIGA '$cleanSiniiga'."
                         )
                     }
-                    if (existingAnimal.ranch_id != formState.ranchId) {
-                        return@transactionWithResult AnimalSaveResult.Error(
-                            "El ejemplar no pertenece a este rancho."
-                        )
+                }
+
+                val existingAnimal = if (isEdit) {
+                    val row = queries.selectAnimalById(animalId).executeAsOneOrNull()
+                        ?: return@transactionWithResult AnimalSaveResult.Error("No se encontró el ejemplar a editar.")
+                    if (row.ranch_id != formState.ranchId) {
+                        return@transactionWithResult AnimalSaveResult.Error("El ejemplar no pertenece a este rancho.")
                     }
-                    if (activeSession != null &&
-                        !RanchAccessPolicy.resolveCapabilities(activeSession).isMultiRanchScope &&
-                        activeSession.ranchId != existingAnimal.ranch_id
-                    ) {
-                        return@transactionWithResult AnimalSaveResult.Error(
-                            "El ejemplar está fuera del rancho autorizado."
-                        )
-                    }
-                    if (hasAncestryCycle(animalId, formState.damId, formState.sireId)) {
+                    if (hasAncestryCycle(animalId, cleanDamId, cleanSireId)) {
                         return@transactionWithResult AnimalSaveResult.ValidationError(
                             "Se detectó un ciclo genealógico en los ancestros seleccionados."
                         )
                     }
-                    targetRanchId = existingAnimal.ranch_id
-                    database.oviAppDatabaseQueries.updateAnimalFormFields(
-                        ranch_id = targetRanchId,
-                        folio_interno = targetFolio,
-                        siniiga_chip = formState.siniigaChip?.trim()?.takeIf { it.isNotEmpty() },
-                        registro_uno = formState.registroUno?.trim()?.takeIf { it.isNotEmpty() },
-                        adn = formState.adn?.trim()?.takeIf { it.isNotEmpty() },
-                        breed = formState.breed,
-                        color = formState.color.trim(),
-                        sex = formState.sex.name,
-                        birth_date = formState.birthDate.trim(),
-                        weaning_date = formState.weaningDate?.trim()?.takeIf { it.isNotEmpty() },
-                        parturition_type = formState.parturitionType.name,
-                        conception_method = formState.conceptionMethod.name,
-                        sire_id = formState.sireId,
-                        dam_id = formState.damId,
-                        external_sire_folio = formState.externalSireFolio?.trim()?.takeIf { it.isNotEmpty() },
-                        external_dam_folio = formState.externalDamFolio?.trim()?.takeIf { it.isNotEmpty() },
-                        entry_reason = formState.entryReason.name,
-                        criador_name = formState.criadorName?.trim()?.takeIf { it.isNotEmpty() },
-                        photo_s3_key = formState.photoS3Key,
-                        life_stage = formState.lifeStage.name,
-                        reproductive_status = formState.reproductiveStatus.name,
-                        updated_at = occurredAt,
-                        id = animalId
-                    )
+                    row
                 } else {
-                    database.oviAppDatabaseQueries.insertAnimal(
-                        id = animalId,
-                        ranch_id = formState.ranchId,
-                        folio_interno = targetFolio,
-                        siniiga_chip = formState.siniigaChip?.trim()?.takeIf { it.isNotEmpty() },
-                        registro_uno = formState.registroUno?.trim()?.takeIf { it.isNotEmpty() },
-                        adn = formState.adn?.trim()?.takeIf { it.isNotEmpty() },
-                        breed = formState.breed,
-                        color = formState.color.trim(),
-                        sex = formState.sex.name,
-                        birth_date = formState.birthDate.trim(),
-                        weaning_date = formState.weaningDate?.trim()?.takeIf { it.isNotEmpty() },
-                        parturition_type = formState.parturitionType.name,
-                        conception_method = formState.conceptionMethod.name,
-                        sire_id = formState.sireId,
-                        dam_id = formState.damId,
-                        external_sire_folio = formState.externalSireFolio?.trim()?.takeIf { it.isNotEmpty() },
-                        external_dam_folio = formState.externalDamFolio?.trim()?.takeIf { it.isNotEmpty() },
-                        entry_reason = formState.entryReason.name,
-                        criador_name = formState.criadorName?.trim()?.takeIf { it.isNotEmpty() },
-                        photo_s3_key = formState.photoS3Key,
-                        birth_event_id = null,
-                        mortality_date = null,
-                        mortality_cause = null,
-                        life_stage = formState.lifeStage.name,
-                        reproductive_status = formState.reproductiveStatus.name,
-                        status = AnimalStatus.ACTIVE.name,
-                        updated_at = occurredAt
-                    )
+                    null
                 }
 
-                // Enqueue to pending_sync_events for offline resilience
-                val payload = json.encodeToString(formState.copy(id = animalId, ranchId = targetRanchId))
-                database.oviAppDatabaseQueries.insertPendingSyncEvent(
-                    mutation_id = mutationId,
-                    entity_type = "ANIMAL",
-                    operation = operation,
-                    occurred_at = occurredAt,
-                    payload_json = payload,
-                    local_photo_path = formState.localPhotoPath,
-                    sync_status = "PENDING"
-                )
-                AnimalSaveResult.Success(animalId, mutationId)
+                val targetRanchId = existingAnimal?.ranch_id ?: formState.ranchId
+
+                if (cleanDamId != null) {
+                    val dam = queries.selectAnimalById(cleanDamId).executeAsOneOrNull()
+                    if (dam == null || dam.ranch_id != targetRanchId || dam.sex != Sex.FEMALE.name) {
+                        return@transactionWithResult AnimalSaveResult.ValidationError(
+                            "La madre seleccionada no es una hembra válida de este rancho."
+                        )
+                    }
+                }
+                if (cleanSireId != null) {
+                    val sire = queries.selectAnimalById(cleanSireId).executeAsOneOrNull()
+                    if (sire == null || sire.ranch_id != targetRanchId || sire.sex != Sex.MALE.name) {
+                        return@transactionWithResult AnimalSaveResult.ValidationError(
+                            "El semental seleccionado no es un macho válido de este rancho."
+                        )
+                    }
+                }
+
+                val mutation = if (isEdit && existingAnimal != null) {
+                    val payload = AnimalUpdatePayload(
+                        animalId = animalId,
+                        folioInterno = targetFolio,
+                        siniigaChip = cleanSiniiga,
+                        registroUno = cleanRegistroUno,
+                        adn = cleanAdn,
+                        breed = formState.breed,
+                        color = cleanColor,
+                        sex = formState.sex.name,
+                        birthDate = cleanBirthDate,
+                        weaningDate = cleanWeaningDate,
+                        entryReason = formState.entryReason.name,
+                        criador = cleanCriador,
+                        parturitionType = formState.parturitionType.name,
+                        conceptionMethod = formState.conceptionMethod.name,
+                        sireId = cleanSireId,
+                        damId = cleanDamId,
+                        externalSireFolio = cleanExtSire,
+                        externalDamFolio = cleanExtDam,
+                        lifeStage = formState.lifeStage.name,
+                        reproductiveStatus = formState.reproductiveStatus.name,
+                        status = existingAnimal.status,
+                        mortalityDate = existingAnimal.mortality_date?.take(10),
+                        mortalityCause = existingAnimal.mortality_cause,
+                        lifeStageAtDeath = existingAnimal.life_stage_at_death,
+                        photoS3Key = formState.photoS3Key,
+                    )
+                    syncQueue.writeAndEnqueue(
+                        entityType = SyncEntityType.ANIMAL,
+                        operation = SyncOperation.UPDATE,
+                        payloadJson = json.encodeToString(payload),
+                        localPhotoPath = formState.localPhotoPath,
+                    ) {
+                        queries.updateAnimalFormFields(
+                            ranch_id = targetRanchId,
+                            folio_interno = targetFolio,
+                            siniiga_chip = cleanSiniiga,
+                            registro_uno = cleanRegistroUno,
+                            adn = cleanAdn,
+                            breed = formState.breed,
+                            color = cleanColor,
+                            sex = formState.sex.name,
+                            birth_date = cleanBirthDate,
+                            weaning_date = cleanWeaningDate,
+                            parturition_type = formState.parturitionType.name,
+                            conception_method = formState.conceptionMethod.name,
+                            sire_id = cleanSireId,
+                            dam_id = cleanDamId,
+                            external_sire_folio = cleanExtSire,
+                            external_dam_folio = cleanExtDam,
+                            entry_reason = formState.entryReason.name,
+                            criador_name = cleanCriador,
+                            photo_s3_key = formState.photoS3Key,
+                            life_stage = formState.lifeStage.name,
+                            reproductive_status = formState.reproductiveStatus.name,
+                            updated_at = occurredAt,
+                            id = animalId,
+                        )
+                    }
+                } else {
+                    val payload = AnimalCreateSyncPayload(
+                        id = animalId,
+                        folioInterno = targetFolio,
+                        siniigaChip = cleanSiniiga,
+                        registroUno = cleanRegistroUno,
+                        adn = cleanAdn,
+                        breed = formState.breed,
+                        color = cleanColor,
+                        sex = formState.sex.name,
+                        birthDate = cleanBirthDate,
+                        weaningDate = cleanWeaningDate,
+                        entryReason = formState.entryReason.name,
+                        criador = cleanCriador,
+                        parturitionType = formState.parturitionType.name,
+                        conceptionMethod = formState.conceptionMethod.name,
+                        sireId = cleanSireId,
+                        damId = cleanDamId,
+                        externalSireFolio = cleanExtSire,
+                        externalDamFolio = cleanExtDam,
+                        lifeStage = formState.lifeStage.name,
+                        reproductiveStatus = formState.reproductiveStatus.name,
+                        status = AnimalStatus.ACTIVE.name,
+                        photoS3Key = formState.photoS3Key,
+                    )
+                    syncQueue.writeAndEnqueue(
+                        entityType = SyncEntityType.ANIMAL,
+                        operation = SyncOperation.CREATE,
+                        payloadJson = json.encodeToString(payload),
+                        localPhotoPath = formState.localPhotoPath,
+                    ) {
+                        queries.insertAnimal(
+                            id = animalId,
+                            ranch_id = targetRanchId,
+                            folio_interno = targetFolio,
+                            siniiga_chip = cleanSiniiga,
+                            registro_uno = cleanRegistroUno,
+                            adn = cleanAdn,
+                            breed = formState.breed,
+                            color = cleanColor,
+                            sex = formState.sex.name,
+                            birth_date = cleanBirthDate,
+                            weaning_date = cleanWeaningDate,
+                            parturition_type = formState.parturitionType.name,
+                            conception_method = formState.conceptionMethod.name,
+                            sire_id = cleanSireId,
+                            dam_id = cleanDamId,
+                            external_sire_folio = cleanExtSire,
+                            external_dam_folio = cleanExtDam,
+                            entry_reason = formState.entryReason.name,
+                            criador_name = cleanCriador,
+                            photo_s3_key = formState.photoS3Key,
+                            birth_event_id = null,
+                            mortality_date = null,
+                            mortality_cause = null,
+                            life_stage = formState.lifeStage.name,
+                            reproductive_status = formState.reproductiveStatus.name,
+                            status = AnimalStatus.ACTIVE.name,
+                            updated_at = occurredAt,
+                        )
+                    }
+                }
+                AnimalSaveResult.Success(animalId, mutation.mutationId)
             }
-            result
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -183,8 +301,9 @@ class SqlDelightAnimalCommandRepository(
         }
     }
 
-    override suspend fun getAnimalById(id: String): Animal? = withContext(ioDispatcher) {
+    override suspend fun getAnimalById(id: String, ranchId: String?): Animal? = withContext(ioDispatcher) {
         val row = database.oviAppDatabaseQueries.selectAnimalById(id).executeAsOneOrNull() ?: return@withContext null
+        if (ranchId != null && row.ranch_id != ranchId) return@withContext null
         Animal(
             id = row.id,
             ranchId = row.ranch_id,
@@ -218,7 +337,7 @@ class SqlDelightAnimalCommandRepository(
 
     override suspend fun getLatestLocalPhotoPath(animalId: String): String? = withContext(ioDispatcher) {
         database.oviAppDatabaseQueries
-            .selectLatestLocalPhotoByAnimalId(animalId)
+            .selectLatestLocalPhotoByAnimalId(escapeLikePattern(animalId))
             .executeAsOneOrNull()
             ?.local_photo_path
     }
@@ -226,7 +345,7 @@ class SqlDelightAnimalCommandRepository(
     override suspend fun isLocalPhotoReferencedByPendingSync(localPhotoPath: String): Boolean =
         withContext(ioDispatcher) {
             database.oviAppDatabaseQueries
-                .countPendingSyncEventsByPhotoPath(localPhotoPath)
+                .countPendingSyncEventsByLocalPhoto(localPhotoPath)
                 .executeAsOne() > 0L
         }
 
@@ -279,33 +398,7 @@ class SqlDelightAnimalCommandRepository(
         }
         return false
     }
-}
 
-private fun formatEpochMillisToIsoUtc(epochMillis: Long): String {
-    val totalSeconds = epochMillis.floorDiv(1000L)
-    val second = totalSeconds.mod(60)
-    val totalMinutes = totalSeconds.floorDiv(60L)
-    val minute = totalMinutes.mod(60)
-    val totalHours = totalMinutes.floorDiv(60L)
-    val hour = totalHours.mod(24)
-    val daysSinceEpoch = totalHours.floorDiv(24L)
-
-    // Howard Hinnant's civil-from-days algorithm (UTC)
-    val z = daysSinceEpoch + 719468L
-    val era = (if (z >= 0) z else z - 146096L) / 146097L
-    val doe = z - era * 146097L
-    val yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
-    val y = yoe + era * 400L
-    val doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
-    val mp = (5L * doy + 2L) / 153L
-    val day = (doy - (153L * mp + 2L) / 5L + 1L).toInt()
-    val month = (mp + (if (mp < 10L) 3L else -9L)).toInt()
-    val year = (y + (if (month <= 2) 1L else 0L)).toInt()
-
-    return "${year.toString().padStart(4, '0')}-" +
-        "${month.toString().padStart(2, '0')}-" +
-        "${day.toString().padStart(2, '0')}T" +
-        "${hour.toString().padStart(2, '0')}:" +
-        "${minute.toString().padStart(2, '0')}:" +
-        "${second.toString().padStart(2, '0')}Z"
+    private fun escapeLikePattern(raw: String): String =
+        raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 }

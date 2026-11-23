@@ -52,9 +52,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.agrotech.oviapp.android.ui.theme.FieldPalette
 import com.agrotech.oviapp.animals.domain.model.AnimalDetailWithGenealogy
 import com.agrotech.oviapp.animals.domain.model.OffspringSummary
 import com.agrotech.oviapp.animals.domain.repository.AnimalInventoryRepository
@@ -70,18 +72,16 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.time.LocalDate
 
-private val BaappPrimaryGreen = Color(0xFF1B5E20)
-private val BaappBackground = Color(0xFFF7F9F7)
+private val BaappPrimaryGreen = Color(FieldPalette.PASTURE)
 private val BaappSoftGreen = Color(0xFFE8F5E9)
-private val BaappFemalePink = Color(0xFFAD1457)
-private val BaappFemalePinkBg = Color(0xFFFCE4EC)
-private val BaappMaleBlue = Color(0xFF0D47A1)
-private val BaappMaleBlueBg = Color(0xFFE3F2FD)
-private val BaappHighContrastText = Color(0xFF1A1A1A)
+private val BaappFemalePink = Color(FieldPalette.FEMALE)
+private val BaappMaleBlue = Color(FieldPalette.MALE)
 private const val MAX_REMOTE_PHOTO_BYTES = 5 * 1024 * 1024
+private val OWNED_PHOTO_DIRS = listOf("pending_animal_photos", "pending_photos")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,39 +90,53 @@ fun AnimalDetailScreen(
     inventoryRepository: AnimalInventoryRepository,
     onBackClick: () -> Unit,
     onNavigateToAnimal: (String) -> Unit,
+    ranchId: String? = null,
     onEditAnimalClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBackClick)
+    val context = LocalContext.current
 
-    var detail by remember(animalId) { mutableStateOf<AnimalDetailWithGenealogy?>(null) }
-    var isLoading by remember(animalId) { mutableStateOf(true) }
-    var errorMessage by remember(animalId) { mutableStateOf<String?>(null) }
+    var detail by remember(animalId, ranchId) { mutableStateOf<AnimalDetailWithGenealogy?>(null) }
+    var isLoading by remember(animalId, ranchId) { mutableStateOf(true) }
+    var errorMessage by remember(animalId, ranchId) { mutableStateOf<String?>(null) }
     var retryTrigger by remember { mutableIntStateOf(0) }
 
     val loadedAnimalId = detail?.animal?.id
     val loadedLocalPhotoPath = detail?.localPhotoPath
     val loadedPhotoS3Key = detail?.animal?.photoS3Key
 
-    var photoBitmap by remember(loadedAnimalId, loadedPhotoS3Key) { mutableStateOf<ImageBitmap?>(null) }
-    var isLoadingPhoto by remember(loadedAnimalId, loadedPhotoS3Key) { mutableStateOf(false) }
-    var photoStatusMessage by remember(loadedAnimalId, loadedPhotoS3Key) { mutableStateOf<String?>(null) }
+    var photoBitmap by remember(loadedAnimalId, loadedLocalPhotoPath, loadedPhotoS3Key) { mutableStateOf<ImageBitmap?>(null) }
+    var isLoadingPhoto by remember(loadedAnimalId, loadedLocalPhotoPath, loadedPhotoS3Key) { mutableStateOf(false) }
+    var photoStatusMessage by remember(loadedAnimalId, loadedLocalPhotoPath, loadedPhotoS3Key) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(loadedAnimalId, loadedLocalPhotoPath, loadedPhotoS3Key) {
         if (loadedAnimalId == null) return@LaunchedEffect
         photoBitmap = null
         photoStatusMessage = null
-        val localFile = loadedLocalPhotoPath?.let { File(it) }
-        val hasPresignedUrl = !loadedPhotoS3Key.isNullOrBlank() &&
-            (loadedPhotoS3Key.startsWith("https://", ignoreCase = true) ||
-                loadedPhotoS3Key.startsWith("http://", ignoreCase = true))
+        val isAllowedRemoteUrl = !loadedPhotoS3Key.isNullOrBlank() && isTrustedHttpsMediaUrl(loadedPhotoS3Key)
 
-        if (localFile != null && localFile.exists()) {
+        val localBytes = if (!loadedLocalPhotoPath.isNullOrBlank()) {
             isLoadingPhoto = true
             try {
-                val decoded = withContext(Dispatchers.IO) {
-                    decodeSampledBitmapFromBytes(localFile.readBytes())
+                withContext(Dispatchers.IO) {
+                    readOwnedLocalPhotoBytes(context.filesDir, loadedLocalPhotoPath, MAX_REMOTE_PHOTO_BYTES)
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            } finally {
+                isLoadingPhoto = false
+            }
+        } else {
+            null
+        }
+
+        if (localBytes != null) {
+            isLoadingPhoto = true
+            try {
+                val decoded = withContext(Dispatchers.IO) { decodeSampledBitmapFromBytes(localBytes) }
                 if (decoded != null) {
                     photoBitmap = decoded.asImageBitmap()
                 } else {
@@ -135,7 +149,7 @@ fun AnimalDetailScreen(
             } finally {
                 isLoadingPhoto = false
             }
-        } else if (hasPresignedUrl) {
+        } else if (isAllowedRemoteUrl) {
             isLoadingPhoto = true
             try {
                 val decoded = withContext(Dispatchers.IO) {
@@ -160,11 +174,11 @@ fun AnimalDetailScreen(
         }
     }
 
-    LaunchedEffect(animalId, retryTrigger) {
+    LaunchedEffect(animalId, ranchId, retryTrigger) {
         isLoading = true
         errorMessage = null
         try {
-            detail = inventoryRepository.getAnimalGenealogy(animalId)
+            detail = inventoryRepository.getAnimalGenealogy(animalId, ranchId)
             if (detail == null) {
                 errorMessage = "No se encontró la ficha del ejemplar."
             }
@@ -220,14 +234,14 @@ fun AnimalDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(BaappBackground)
+                .background(MaterialTheme.colorScheme.background)
                 .padding(innerPadding)
         ) {
             when {
                 isLoading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center),
-                        color = BaappPrimaryGreen
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
                 errorMessage != null -> {
@@ -240,13 +254,13 @@ fun AnimalDetailScreen(
                     ) {
                         Text(
                             text = errorMessage!!,
-                            color = Color(0xFFB71C1C),
+                            color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Button(
                             onClick = { retryTrigger++ },
                             modifier = Modifier.heightIn(min = 56.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
                             Text("Reintentar")
                         }
@@ -286,7 +300,7 @@ fun AnimalDetailScreen(
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                             ) {
                                 Column(modifier = Modifier.padding(16.dp)) {
@@ -298,7 +312,9 @@ fun AnimalDetailScreen(
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Text(
                                             text = "No tiene crías registradas en el rebaño.",
-                                            style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         )
                                     }
                                 }
@@ -344,7 +360,7 @@ private fun AnimalSummaryCard(animal: Animal) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -394,42 +410,42 @@ private fun AnimalSummaryCard(animal: Animal) {
                     text = "Arete / Folio: ${animal.folioInterno}",
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Bold,
-                        color = BaappHighContrastText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 )
                 Text(
                     text = "Raza: ${animal.breed} · Color: ${animal.color}",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.Medium,
-                        color = BaappHighContrastText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 )
                 Text(
                     text = "$ageLabelPrefix: ${dynamicAge?.formatSpanish() ?: "Fecha inválida"}",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.Bold,
-                        color = sexHeaderBg
+                        color = MaterialTheme.colorScheme.primary
                     )
                 )
                 Text(
                     text = "Fecha de nacimiento: ${animal.birthDateIso}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = BaappHighContrastText)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface)
                 )
                 Text(
                     text = "Fecha de destete: ${animal.weaningDateIso ?: "Pendiente / Sin registro"}",
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontWeight = FontWeight.SemiBold,
-                        color = BaappHighContrastText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 )
                 Text(
                     text = "Etapa: ${lifeStageText(animal.lifeStage)} · Estado rep.: ${reproductiveText(animal.reproductiveStatus)}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
                 if (!animal.siniigaChip.isNullOrBlank()) {
                     Text(
                         text = "Chip SINIIGA: ${animal.siniigaChip}",
-                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
                 if (!animal.registroUno.isNullOrBlank() || !animal.adn.isNullOrBlank()) {
@@ -438,13 +454,13 @@ private fun AnimalSummaryCard(animal: Animal) {
                             animal.registroUno?.let { "UNO: $it" },
                             animal.adn?.let { "ADN: $it" }
                         ).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
                 if (!animal.criadorName.isNullOrBlank()) {
                     Text(
                         text = "Criador / Origen: ${animal.criadorName}",
-                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF333333))
+                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
                 if (animal.status == AnimalStatus.DECEASED) {
@@ -456,7 +472,7 @@ private fun AnimalSummaryCard(animal: Animal) {
                         Text(
                             text = "Baja por fallecimiento ($mortalityInfo)",
                             style = MaterialTheme.typography.bodySmall.copy(
-                                color = Color(0xFFB71C1C),
+                                color = MaterialTheme.colorScheme.error,
                                 fontWeight = FontWeight.Bold
                             )
                         )
@@ -478,7 +494,7 @@ private fun AnimalPhotoCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
@@ -489,7 +505,7 @@ private fun AnimalPhotoCard(
                 text = "Fotografía del Ejemplar",
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontWeight = FontWeight.Bold,
-                    color = BaappHighContrastText
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             )
             when {
@@ -500,12 +516,12 @@ private fun AnimalPhotoCard(
                             .height(160.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        CircularProgressIndicator(color = BaappPrimaryGreen)
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 bitmap != null -> {
                     Image(
-                        bitmap = bitmap!!,
+                        bitmap = bitmap,
                         contentDescription = "Fotografía de $folioInterno",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -517,7 +533,7 @@ private fun AnimalPhotoCard(
                 else -> {
                     Text(
                         text = photoStatusMessage ?: "Sin fotografía registrada.",
-                        style = MaterialTheme.typography.bodySmall.copy(color = Color(0xFF424242))
+                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
             }
@@ -525,13 +541,34 @@ private fun AnimalPhotoCard(
     }
 }
 
+private fun isTrustedHttpsMediaUrl(urlString: String): Boolean {
+    val uri = runCatching { URI(urlString.trim()) }.getOrNull() ?: return false
+    if (!uri.scheme.equals("https", ignoreCase = true)) return false
+    val host = uri.host?.lowercase() ?: return false
+    return host.endsWith(".amazonaws.com") || host.endsWith(".cloudfront.net")
+}
+
+private fun readOwnedLocalPhotoBytes(filesDir: File, path: String, maxBytes: Int): ByteArray? {
+    val target = runCatching { File(path).canonicalFile }.getOrNull() ?: return null
+    val allowed = OWNED_PHOTO_DIRS.any { dirName ->
+        val ownedDir = runCatching { File(filesDir, dirName).canonicalFile }.getOrNull()
+        ownedDir != null && target.parentFile == ownedDir
+    }
+    if (!allowed || !target.isFile) return null
+    val size = target.length()
+    if (size <= 0L || size > maxBytes.toLong()) return null
+    return target.readBytes()
+}
+
 private fun loadBoundedBitmapFromUrl(urlString: String, maxBytes: Int): Bitmap? {
+    if (!isTrustedHttpsMediaUrl(urlString)) return null
     val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
         connectTimeout = 5000
         readTimeout = 8000
-        instanceFollowRedirects = true
+        instanceFollowRedirects = false
     }
     return try {
+        if (connection.responseCode !in 200..299) return null
         connection.inputStream.use { stream ->
             val buffer = ByteArray(8 * 1024)
             val output = ByteArrayOutputStream()
@@ -581,7 +618,7 @@ private fun GenealogyParentsCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
@@ -636,12 +673,12 @@ private fun ParentNavigationRow(
                         text = "$roleLabel: ${parent.folioInterno}",
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            color = BaappPrimaryGreen
+                            color = MaterialTheme.colorScheme.primary
                         )
                     )
                     Text(
                         text = "Raza: ${parent.breed}",
-                        style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -653,7 +690,7 @@ private fun ParentNavigationRow(
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Ver →", color = BaappPrimaryGreen, fontWeight = FontWeight.Bold)
+                    Text("Ver →", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -665,46 +702,9 @@ private fun ParentNavigationRow(
         }
         Text(
             text = text,
-            style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray),
+            style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
             modifier = Modifier.padding(vertical = 4.dp)
         )
-    }
-}
-
-@Composable
-private fun OffspringListCard(
-    offspring: List<OffspringSummary>,
-    onNavigateToAnimal: (String) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "Descendencia / Crías (${offspring.size})",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-            )
-
-            if (offspring.isEmpty()) {
-                Text(
-                    text = "No tiene crías registradas en el rebaño.",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
-                )
-            } else {
-                offspring.forEach { child ->
-                    OffspringItemRow(
-                        child = child,
-                        onClick = { onNavigateToAnimal(child.id) }
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -723,7 +723,7 @@ private fun OffspringItemRow(
             .fillMaxWidth()
             .heightIn(min = 56.dp),
         shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = BaappBackground)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Row(
             modifier = Modifier
@@ -739,12 +739,12 @@ private fun OffspringItemRow(
                 )
                 Text(
                     text = "Nac: ${child.birthDateIso} · ${child.breed}",
-                    style = MaterialTheme.typography.bodySmall.copy(color = Color.DarkGray)
+                    style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                 )
                 if (child.status == AnimalStatus.DECEASED && !child.mortalityDateIso.isNullOrBlank()) {
                     Text(
                         text = "Baja por fallecimiento (${child.mortalityDateIso})",
-                        style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFFB71C1C))
+                        style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.error)
                     )
                 }
             }
@@ -757,7 +757,7 @@ private fun OffspringItemRow(
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("→", color = BaappPrimaryGreen, fontWeight = FontWeight.Bold)
+                Text("→", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
             }
         }
     }

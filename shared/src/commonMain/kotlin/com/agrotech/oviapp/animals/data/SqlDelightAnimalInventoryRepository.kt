@@ -140,20 +140,28 @@ class SqlDelightAnimalInventoryRepository(
         }
     }
 
-    override suspend fun getAnimalGenealogy(animalId: String): AnimalDetailWithGenealogy? = withContext(ioDispatcher) {
+    override suspend fun getAnimalGenealogy(
+        animalId: String,
+        ranchId: String?
+    ): AnimalDetailWithGenealogy? = withContext(ioDispatcher) {
         val row = database.oviAppDatabaseQueries
             .selectAnimalById(animalId)
             .executeAsOneOrNull() ?: return@withContext null
+        if (ranchId != null && row.ranch_id != ranchId) return@withContext null
 
         val animal = row.toDomainAnimal()
         val dam = animal.damId?.let { damId ->
-            database.oviAppDatabaseQueries.selectAnimalById(damId).executeAsOneOrNull()?.toDomainAnimal()
+            database.oviAppDatabaseQueries.selectAnimalById(damId).executeAsOneOrNull()
+                ?.takeIf { it.ranch_id == animal.ranchId }
+                ?.toDomainAnimal()
         }
         val sire = animal.sireId?.let { sireId ->
-            database.oviAppDatabaseQueries.selectAnimalById(sireId).executeAsOneOrNull()?.toDomainAnimal()
+            database.oviAppDatabaseQueries.selectAnimalById(sireId).executeAsOneOrNull()
+                ?.takeIf { it.ranch_id == animal.ranchId }
+                ?.toDomainAnimal()
         }
         val offspring = database.oviAppDatabaseQueries
-            .selectOffspringByParent(animal.id)
+            .selectOffspringByParentInRanch(ranchId = animal.ranchId, parentId = animal.id)
             .executeAsList()
             .map { childRow ->
                 OffspringSummary(
@@ -173,7 +181,7 @@ class SqlDelightAnimalInventoryRepository(
             }
 
         val localPhotoPath = database.oviAppDatabaseQueries
-            .selectLatestLocalPhotoByAnimalId(animal.id)
+            .selectLatestLocalPhotoByAnimalId(escapeLikeQuery(animal.id))
             .executeAsOneOrNull()
             ?.local_photo_path
 
