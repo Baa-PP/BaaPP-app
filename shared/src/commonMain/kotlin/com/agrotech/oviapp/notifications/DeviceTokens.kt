@@ -77,9 +77,12 @@ class DeviceTokenRegistrar(
     suspend fun registerIfNeeded(isLoggedIn: Boolean): DeviceTokenRegistration {
         val token = store.pendingToken ?: return DeviceTokenRegistration.NoToken
         if (!isLoggedIn) return DeviceTokenRegistration.NotLoggedIn
-        if (token == store.registeredToken) return DeviceTokenRegistration.AlreadyRegistered
-
-        val generation = store.sessionGeneration
+        // La marca y la generación se leen bajo el candado: si hay un logout esperando, corre antes y esta
+        // revisión ya ve la marca borrada (si no, el siguiente usuario creería que ya está registrado).
+        val generation = sessionLock.withLock {
+            if (token == store.registeredToken) return DeviceTokenRegistration.AlreadyRegistered
+            store.sessionGeneration
+        }
         return try {
             api.register(DeviceTokenRequest(token = token))
             // Si hubo logout mientras viajaba la petición, ese registro era del usuario anterior:

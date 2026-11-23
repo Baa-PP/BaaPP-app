@@ -81,6 +81,7 @@ import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.notifications.WeaningAlert
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -181,17 +182,20 @@ class MainAppViewModel(
     private fun restoreWeaningAlert(): WeaningAlert? =
         savedState.get<HashMap<String, String>>(WEANING_ALERT_KEY)?.let { WeaningAlert.fromData(it) }
 
-    /** Al entrar se registra el celular; al salir el siguiente usuario debe registrarlo de nuevo. */
+    private var sessionWork: Job? = null
+
+    /**
+     * Al entrar se registra el celular; al salir el siguiente usuario debe registrarlo de nuevo. Los cambios
+     * de sesión se procesan uno tras otro: el registro del usuario nuevo nunca se encola antes de que termine
+     * el logout pendiente del anterior.
+     */
     private fun onSessionChanged(previous: AuthSession?, current: AuthSession?) {
         val context = getApplication<Application>()
         val userLeft = previous != null && (current == null || current.username != previous.username)
-        if (!userLeft) {
-            if (current != null) DeviceTokenWorker.enqueue(context)
-            return
-        }
-        // Primero se olvida el registro del usuario anterior y después se registra el nuevo, en ese orden.
-        viewModelScope.launch {
-            Notifications.registrar(context).onLogout()
+        val pending = sessionWork
+        sessionWork = viewModelScope.launch {
+            pending?.join()
+            if (userLeft) Notifications.registrar(context).onLogout()
             if (current != null) DeviceTokenWorker.enqueue(context)
         }
     }
