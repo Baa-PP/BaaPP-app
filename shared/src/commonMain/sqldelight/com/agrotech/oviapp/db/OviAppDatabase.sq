@@ -112,6 +112,10 @@ countPendingSyncEvents:
 SELECT COUNT(*) FROM pending_sync_events
 WHERE sync_status = 'PENDING';
 
+countPendingSyncEventsByLocalPhoto:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status != 'SYNCED' AND local_photo_path = :localPhotoPath;
+
 -- Filas cambiadas por el último INSERT/UPDATE de esta conexión (para writeAndEnqueueIfChanged).
 changedRows:
 SELECT changes();
