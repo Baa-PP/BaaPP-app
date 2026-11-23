@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.auth.domain.RanchPermission
 import com.agrotech.oviapp.auth.domain.UserRole
+import com.agrotech.oviapp.births.domain.model.BirthImmutabilityPolicy
 import kotlinx.coroutines.launch
 
 private val BaappPrimaryGreen = Color(0xFF1B5E20)
@@ -59,6 +60,8 @@ fun HomeScreen(
     onLogoutClick: () -> Unit,
     onOpenInventoryClick: () -> Unit = {},
     onOpenRegisterAnimalClick: () -> Unit = {},
+    onOpenBirthEventClick: () -> Unit = {},
+    onOpenSavedBirthsClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -275,7 +278,13 @@ fun HomeScreen(
                 } else {
                     if (capabilities.canCapture) {
                         Button(
-                            onClick = { showUpcomingNotice("Registro de parto disponible en APP-12") },
+                            onClick = {
+                                if (session.ranchId.isNullOrBlank()) {
+                                    showUpcomingNotice("No tienes un rancho asignado para registrar nacimientos.")
+                                } else {
+                                    onOpenBirthEventClick()
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 56.dp),
@@ -286,10 +295,29 @@ fun HomeScreen(
                         }
                     }
 
-                    if (capabilities.canEditSavedBirths) {
+                    if (capabilities.canReadInventory) {
                         if (capabilities.canCapture) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
+                        OutlinedButton(
+                            onClick = {
+                                if (session.ranchId.isNullOrBlank()) {
+                                    showUpcomingNotice("No tienes un rancho asignado para consultar nacimientos.")
+                                } else {
+                                    onOpenSavedBirthsClick()
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 56.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Ver Nacimientos Guardados")
+                        }
+                    }
+
+                    if (capabilities.canEditSavedBirths) {
+                        Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = { showUpcomingNotice("Corrección auditada de parto disponible para Técnico") },
                             modifier = Modifier
@@ -300,15 +328,11 @@ fun HomeScreen(
                             Text("Corregir / Auditar Nacimiento Guardado")
                         }
                     } else if (capabilities.showBirthImmutabilityNotice) {
-                        if (capabilities.canCapture) {
+                        if (capabilities.canCapture || capabilities.canReadInventory) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
                         InfoNoticeBanner(
-                            "Los nacimientos guardados son inmutables. Si hubo un error, repórtalo con foto a Técnico o Asociación."
-                        )
-                    } else if (!capabilities.canCapture) {
-                        InfoNoticeBanner(
-                            "Consulta de nacimientos disponible en APP-12 (solo lectura/auditoría)."
+                            BirthImmutabilityPolicy.AUDITED_CORRECTION_NOTICE
                         )
                     }
                 }

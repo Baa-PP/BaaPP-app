@@ -44,6 +44,7 @@ CREATE TABLE local_birth_events (
     local_photo_path TEXT,
     registered_by_user_id TEXT,
     notes TEXT,
+    draft_key TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -86,6 +87,7 @@ CREATE INDEX idx_local_animals_weaning_pending ON local_animals (birth_date, sta
 
 CREATE INDEX idx_local_birth_events_ranch_date ON local_birth_events (ranch_id, birth_date DESC);
 CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
+CREATE UNIQUE INDEX idx_local_birth_events_draft_key ON local_birth_events (draft_key);
 
 CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
@@ -361,22 +363,36 @@ selectBirthEventById:
 SELECT * FROM local_birth_events
 WHERE id = :id;
 
+selectBirthEventByDraftKey:
+SELECT * FROM local_birth_events
+WHERE draft_key = :draftKey
+LIMIT 1;
+
 selectBirthEventsByDam:
 SELECT * FROM local_birth_events
 WHERE dam_id = :damId
 ORDER BY birth_date DESC;
 
+countBirthEventsByLocalPhoto:
+SELECT COUNT(*) FROM local_birth_events
+WHERE local_photo_path = :localPhotoPath;
+
+markMotherLactatingAfterBirth:
+UPDATE local_animals
+SET reproductive_status = 'LACTATING', updated_at = :updatedAt
+WHERE id = :id AND ranch_id = :ranchId AND status = 'ACTIVE';
+
 insertBirthEvent:
-INSERT OR REPLACE INTO local_birth_events (
+INSERT INTO local_birth_events (
     id, ranch_id, dam_id, sire_id, birth_date,
     live_births, stillborns, parturition_type, conception_method,
     photo_s3_key, local_photo_path, registered_by_user_id, notes,
-    created_at, updated_at
+    draft_key, created_at, updated_at
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?,
-    ?, ?
+    ?, ?, ?
 );
 
 -- Queries: local_weight_measurements (paginated & indexed)

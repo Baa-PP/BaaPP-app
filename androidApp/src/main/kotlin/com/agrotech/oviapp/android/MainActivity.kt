@@ -45,9 +45,11 @@ import androidx.lifecycle.viewModelScope
 import app.cash.sqldelight.db.SqlDriver
 import com.agrotech.oviapp.android.ui.AnimalDetailScreen
 import com.agrotech.oviapp.android.ui.AnimalFormScreen
+import com.agrotech.oviapp.android.ui.BirthEventScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.InventoryScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
+import com.agrotech.oviapp.android.ui.SavedBirthEventsScreen
 import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
@@ -59,6 +61,10 @@ import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
+import com.agrotech.oviapp.births.data.SqlDelightBirthEventRepository
+import com.agrotech.oviapp.births.domain.model.BirthEventDraft
+import com.agrotech.oviapp.births.domain.model.BirthSaveResult
+import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
 import com.agrotech.oviapp.db.DatabaseDriverFactory
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.LifeStage
@@ -97,6 +103,8 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
         private set
     var animalSaveState by mutableStateOf<AnimalSaveUiState>(AnimalSaveUiState.Idle)
         private set
+    var birthSaveState by mutableStateOf<BirthSaveUiState>(BirthSaveUiState.Idle)
+        private set
 
     private val lifecycleLock = Any()
     private var isCleared = false
@@ -105,6 +113,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
     private var cachedAuthRepository: AuthRepository? = null
     private var cachedInventoryRepository: AnimalInventoryRepository? = null
     private var cachedCommandRepository: AnimalCommandRepository? = null
+    private var cachedBirthEventRepository: BirthEventRepository? = null
 
     init {
         initialize()
@@ -153,6 +162,44 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
 
     fun resetAnimalSaveState() {
         animalSaveState = AnimalSaveUiState.Idle
+    }
+
+    fun saveBirthEvent(draftKey: String, draft: BirthEventDraft, todayDateIso: String) {
+        val repo = synchronized(lifecycleLock) {
+            if (isCleared) null else cachedBirthEventRepository
+        } ?: return
+        if (birthSaveState is BirthSaveUiState.Saving) return
+
+        birthSaveState = BirthSaveUiState.Saving(draftKey)
+        viewModelScope.launch {
+            try {
+                when (val res = repo.saveBirthEventOffline(draft, todayDateIso, draftKey)) {
+                    is BirthSaveResult.Success -> {
+                        birthSaveState = BirthSaveUiState.Success(draftKey, draft.localPhotoPath)
+                    }
+                    is BirthSaveResult.DuplicateFolio -> {
+                        birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
+                    }
+                    is BirthSaveResult.ValidationError -> {
+                        birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
+                    }
+                    is BirthSaveResult.Error -> {
+                        birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                birthSaveState = BirthSaveUiState.Error(
+                    draftKey,
+                    e.message ?: "Error guardando el evento de parto."
+                )
+            }
+        }
+    }
+
+    fun resetBirthSaveState() {
+        birthSaveState = BirthSaveUiState.Idle
     }
 
     fun retryInitialization() {
@@ -212,7 +259,12 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     if (isCleared) null else cachedDriver
                 }
                 val newDriver = if (existingDriver == null) {
-                    DatabaseDriverFactory(appContext).createDriver()
+                    try {
+                        DatabaseDriverFactory(appContext).createDriver()
+                    } catch (t: Throwable) {
+                        if (existingAuth == null) authRepo.close()
+                        throw t
+                    }
                 } else {
                     null
                 }
@@ -233,29 +285,30 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     return@withContext null
                 }
 
-                val (database, inventoryRepo, commandRepo) = synchronized(lifecycleLock) {
+                val deps = synchronized(lifecycleLock) {
                     if (isCleared) return@withContext null
                     val db = cachedDatabase ?: OviAppDatabase(driver).also { cachedDatabase = it }
                     val inv = cachedInventoryRepository
                         ?: SqlDelightAnimalInventoryRepository(
                             database = db,
                             ioDispatcher = Dispatchers.IO
-                        ).also {
-                            cachedInventoryRepository = it
-                        }
+                        ).also { cachedInventoryRepository = it }
                     val cmd = cachedCommandRepository
                         ?: SqlDelightAnimalCommandRepository(
                             database = db,
                             ioDispatcher = Dispatchers.IO,
                             sessionStorage = sessionStorage
-                        ).also {
-                            cachedCommandRepository = it
-                        }
-                    Triple(db, inv, cmd)
+                        ).also { cachedCommandRepository = it }
+                    val births = cachedBirthEventRepository
+                        ?: SqlDelightBirthEventRepository(
+                            database = db,
+                            ioDispatcher = Dispatchers.IO
+                        ).also { cachedBirthEventRepository = it }
+                    AppDependencies(authRepo, inv, cmd, births)
                 }
 
                 val cachedSession = authRepo.getCachedSession()
-                AppDependencies(authRepo, inventoryRepo, commandRepo) to cachedSession
+                deps to cachedSession
             } ?: return
             if (synchronized(lifecycleLock) { isCleared }) return
             currentSession = dependencies.second
@@ -282,6 +335,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
             cachedDatabase = null
             cachedInventoryRepository = null
             cachedCommandRepository = null
+            cachedBirthEventRepository = null
             auth to driver
         }
         authToClose?.close()
@@ -296,24 +350,28 @@ sealed interface AnimalSaveUiState {
     data class Error(val draftKey: String, val message: String) : AnimalSaveUiState
 }
 
+sealed interface BirthSaveUiState {
+    data object Idle : BirthSaveUiState
+    data class Saving(val draftKey: String) : BirthSaveUiState
+    data class Success(val draftKey: String, val localPhotoPath: String?) : BirthSaveUiState
+    data class Error(val draftKey: String, val message: String) : BirthSaveUiState
+}
+
 data class AppDependencies(
     val authRepository: AuthRepository,
     val inventoryRepository: AnimalInventoryRepository,
-    val commandRepository: AnimalCommandRepository
+    val commandRepository: AnimalCommandRepository,
+    val birthEventRepository: BirthEventRepository
 )
 
 sealed interface InitialState {
     data object Loading : InitialState
-    data class Ready(
-        val dependencies: AppDependencies
-    ) : InitialState
+    data class Ready(val dependencies: AppDependencies) : InitialState
     data class Error(val message: String) : InitialState
 }
 
 @Composable
-private fun MainApp(
-    viewModel: MainAppViewModel
-) {
+private fun MainApp(viewModel: MainAppViewModel) {
     val state = viewModel.state
     val isBusy = viewModel.isBusy
 
@@ -337,11 +395,15 @@ private fun MainApp(
                 authRepository = state.dependencies.authRepository,
                 inventoryRepository = state.dependencies.inventoryRepository,
                 commandRepository = state.dependencies.commandRepository,
+                birthEventRepository = state.dependencies.birthEventRepository,
                 session = viewModel.currentSession,
                 onSessionChange = { viewModel.updateSession(it) },
                 animalSaveState = viewModel.animalSaveState,
                 onSaveAnimal = { draftKey, form -> viewModel.saveAnimal(draftKey, form) },
-                onResetAnimalSaveState = { viewModel.resetAnimalSaveState() }
+                onResetAnimalSaveState = { viewModel.resetAnimalSaveState() },
+                birthSaveState = viewModel.birthSaveState,
+                onSaveBirthEvent = { key, draft, today -> viewModel.saveBirthEvent(key, draft, today) },
+                onResetBirthSaveState = { viewModel.resetBirthSaveState() }
             )
         }
         is InitialState.Error -> {
@@ -415,6 +477,8 @@ private sealed interface AppScreen {
     data object Inventory : AppScreen
     data class AnimalDetail(val animalId: String) : AppScreen
     data class AnimalForm(val animalId: String? = null) : AppScreen
+    data object BirthEvent : AppScreen
+    data object SavedBirthEvents : AppScreen
 }
 
 private val AppScreenSaver = listSaver<AppScreen, String>(
@@ -424,6 +488,8 @@ private val AppScreenSaver = listSaver<AppScreen, String>(
             is AppScreen.Inventory -> listOf("Inventory")
             is AppScreen.AnimalDetail -> listOf("AnimalDetail", screen.animalId)
             is AppScreen.AnimalForm -> listOf("AnimalForm", screen.animalId ?: "")
+            is AppScreen.BirthEvent -> listOf("BirthEvent")
+            is AppScreen.SavedBirthEvents -> listOf("SavedBirthEvents")
         }
     },
     restore = { saved ->
@@ -434,6 +500,8 @@ private val AppScreenSaver = listSaver<AppScreen, String>(
                 if (!id.isNullOrBlank()) AppScreen.AnimalDetail(id) else AppScreen.Inventory
             }
             "AnimalForm" -> AppScreen.AnimalForm(saved.getOrNull(1)?.takeIf { it.isNotEmpty() })
+            "BirthEvent" -> AppScreen.BirthEvent
+            "SavedBirthEvents" -> AppScreen.SavedBirthEvents
             else -> AppScreen.Home
         }
     }
@@ -449,11 +517,15 @@ fun AppNavigation(
     authRepository: AuthRepository,
     inventoryRepository: AnimalInventoryRepository,
     commandRepository: AnimalCommandRepository,
+    birthEventRepository: BirthEventRepository,
     session: AuthSession?,
     onSessionChange: (AuthSession?) -> Unit,
     animalSaveState: AnimalSaveUiState = AnimalSaveUiState.Idle,
     onSaveAnimal: (String, AnimalFormState) -> Unit = { _, _ -> },
-    onResetAnimalSaveState: () -> Unit = {}
+    onResetAnimalSaveState: () -> Unit = {},
+    birthSaveState: BirthSaveUiState = BirthSaveUiState.Idle,
+    onSaveBirthEvent: (String, BirthEventDraft, String) -> Unit = { _, _, _ -> },
+    onResetBirthSaveState: () -> Unit = {}
 ) {
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
@@ -472,8 +544,8 @@ fun AppNavigation(
     val scope = rememberCoroutineScope()
 
     if (session != null) {
-        val currentRanchId = session?.ranchId
-        val capabilities = session!!.uiCapabilities()
+        val currentRanchId = session.ranchId
+        val capabilities = session.uiCapabilities()
         when (val screen = currentScreen) {
             is AppScreen.Inventory -> {
                 if (!currentRanchId.isNullOrBlank() && capabilities.canReadInventory) {
@@ -581,12 +653,44 @@ fun AppNavigation(
                     }
                 }
             }
+            is AppScreen.BirthEvent -> {
+                if (!currentRanchId.isNullOrBlank() && capabilities.canCapture) {
+                    BirthEventScreen(
+                        ranchId = currentRanchId,
+                        registeredByUsername = session.username,
+                        birthEventRepository = birthEventRepository,
+                        saveState = birthSaveState,
+                        onSaveBirthEvent = onSaveBirthEvent,
+                        onResetSaveState = onResetBirthSaveState,
+                        onNavigateBack = { currentScreen = AppScreen.Home }
+                    )
+                } else {
+                    LaunchedEffect(screen, currentRanchId, capabilities.canCapture) {
+                        currentScreen = AppScreen.Home
+                    }
+                }
+            }
+            is AppScreen.SavedBirthEvents -> {
+                if (!currentRanchId.isNullOrBlank() && capabilities.canReadInventory) {
+                    SavedBirthEventsScreen(
+                        ranchId = currentRanchId,
+                        capabilities = capabilities,
+                        birthEventRepository = birthEventRepository,
+                        onNavigateBack = { currentScreen = AppScreen.Home }
+                    )
+                } else {
+                    LaunchedEffect(screen, currentRanchId, capabilities.canReadInventory) {
+                        currentScreen = AppScreen.Home
+                    }
+                }
+            }
             is AppScreen.Home -> {
                 HomeScreen(
-                    session = session!!,
+                    session = session,
                     onLogoutClick = {
                         authRepository.logout()
                         onResetAnimalSaveState()
+                        onResetBirthSaveState()
                         onSessionChange(null)
                         detailBackStack = emptyList()
                         returnToDetailId = null
@@ -598,13 +702,23 @@ fun AppNavigation(
                         errorMessage = null
                     },
                     onOpenInventoryClick = {
-                        if (!session?.ranchId.isNullOrBlank()) {
+                        if (!session.ranchId.isNullOrBlank() && capabilities.canReadInventory) {
                             currentScreen = AppScreen.Inventory
                         }
                     },
                     onOpenRegisterAnimalClick = {
-                        if (!session?.ranchId.isNullOrBlank()) {
+                        if (!session.ranchId.isNullOrBlank() && capabilities.canCapture) {
                             currentScreen = AppScreen.AnimalForm(animalId = null)
+                        }
+                    },
+                    onOpenBirthEventClick = {
+                        if (!session.ranchId.isNullOrBlank() && capabilities.canCapture) {
+                            currentScreen = AppScreen.BirthEvent
+                        }
+                    },
+                    onOpenSavedBirthsClick = {
+                        if (!session.ranchId.isNullOrBlank() && capabilities.canReadInventory) {
+                            currentScreen = AppScreen.SavedBirthEvents
                         }
                     }
                 )
