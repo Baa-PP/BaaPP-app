@@ -52,8 +52,13 @@ data class AnimalFormState(
             return "La fecha de nacimiento debe tener formato válido YYYY-MM-DD."
         }
         val cleanWeaningDate = weaningDate?.trim()
-        if (!cleanWeaningDate.isNullOrEmpty() && !isValidIsoDate(cleanWeaningDate)) {
-            return "La fecha de destete debe tener formato válido YYYY-MM-DD."
+        if (!cleanWeaningDate.isNullOrEmpty()) {
+            if (!isValidIsoDate(cleanWeaningDate)) {
+                return "La fecha de destete debe tener formato válido YYYY-MM-DD."
+            }
+            if (cleanWeaningDate < cleanBirthDate) {
+                return "La fecha de destete no puede ser anterior a la fecha de nacimiento."
+            }
         }
         if (!id.isNullOrBlank()) {
             if (damId == id) {

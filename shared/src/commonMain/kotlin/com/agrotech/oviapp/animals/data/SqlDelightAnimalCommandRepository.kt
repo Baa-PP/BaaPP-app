@@ -38,8 +38,8 @@ class SqlDelightAnimalCommandRepository(
         }
 
         val isEdit = !formState.id.isNullOrBlank()
+        val activeSession = if (sessionStorage != null) sessionStorage.getSession() else null
         if (isEdit && sessionStorage != null) {
-            val activeSession = sessionStorage.getSession()
             val canEdit = activeSession?.let { RanchAccessPolicy.resolveCapabilities(it).canEditGeneralRecords } ?: false
             if (!canEdit) {
                 return@withContext AnimalSaveResult.ValidationError(
@@ -67,6 +67,7 @@ class SqlDelightAnimalCommandRepository(
             }
 
             val result = database.transactionWithResult<AnimalSaveResult> {
+                var targetRanchId = formState.ranchId
                 if (isEdit) {
                     val existingAnimal = database.oviAppDatabaseQueries
                         .selectAnimalById(animalId)
@@ -76,8 +77,27 @@ class SqlDelightAnimalCommandRepository(
                             "No se encontró el ejemplar a editar."
                         )
                     }
+                    if (existingAnimal.ranch_id != formState.ranchId) {
+                        return@transactionWithResult AnimalSaveResult.Error(
+                            "El ejemplar no pertenece a este rancho."
+                        )
+                    }
+                    if (activeSession != null &&
+                        !RanchAccessPolicy.resolveCapabilities(activeSession).isMultiRanchScope &&
+                        activeSession.ranchId != existingAnimal.ranch_id
+                    ) {
+                        return@transactionWithResult AnimalSaveResult.Error(
+                            "El ejemplar está fuera del rancho autorizado."
+                        )
+                    }
+                    if (hasAncestryCycle(animalId, formState.damId, formState.sireId)) {
+                        return@transactionWithResult AnimalSaveResult.ValidationError(
+                            "Se detectó un ciclo genealógico en los ancestros seleccionados."
+                        )
+                    }
+                    targetRanchId = existingAnimal.ranch_id
                     database.oviAppDatabaseQueries.updateAnimalFormFields(
-                        ranch_id = formState.ranchId,
+                        ranch_id = targetRanchId,
                         folio_interno = targetFolio,
                         siniiga_chip = formState.siniigaChip?.trim()?.takeIf { it.isNotEmpty() },
                         registro_uno = formState.registroUno?.trim()?.takeIf { it.isNotEmpty() },
@@ -134,7 +154,7 @@ class SqlDelightAnimalCommandRepository(
                 }
 
                 // Enqueue to pending_sync_events for offline resilience
-                val payload = json.encodeToString(formState.copy(id = animalId))
+                val payload = json.encodeToString(formState.copy(id = animalId, ranchId = targetRanchId))
                 database.oviAppDatabaseQueries.insertPendingSyncEvent(
                     mutation_id = mutationId,
                     entity_type = "ANIMAL",
@@ -209,6 +229,33 @@ class SqlDelightAnimalCommandRepository(
             }
             allParents
         }
+
+    private fun hasAncestryCycle(
+        targetAnimalId: String,
+        damId: String?,
+        sireId: String?
+    ): Boolean {
+        val visited = mutableSetOf<String>()
+        val queue = ArrayDeque<String>()
+        damId?.takeIf { it.isNotBlank() }?.let { queue.addLast(it) }
+        sireId?.takeIf { it.isNotBlank() }?.let { queue.addLast(it) }
+
+        while (queue.isNotEmpty()) {
+            val currentId = queue.removeFirst()
+            if (currentId == targetAnimalId) {
+                return true
+            }
+            if (!visited.add(currentId)) {
+                continue
+            }
+            val parent = database.oviAppDatabaseQueries
+                .selectAnimalById(currentId)
+                .executeAsOneOrNull() ?: continue
+            parent.dam_id?.takeIf { it.isNotBlank() }?.let { queue.addLast(it) }
+            parent.sire_id?.takeIf { it.isNotBlank() }?.let { queue.addLast(it) }
+        }
+        return false
+    }
 }
 
 private fun formatEpochMillisToIsoUtc(epochMillis: Long): String {

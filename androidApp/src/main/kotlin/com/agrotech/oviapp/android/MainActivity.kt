@@ -90,6 +90,8 @@ class MainActivity : ComponentActivity() {
 class MainAppViewModel(application: Application) : AndroidViewModel(application) {
     var state by mutableStateOf<InitialState>(InitialState.Loading)
         private set
+    var currentSession by mutableStateOf<AuthSession?>(null)
+        private set
     var isBusy by mutableStateOf(false)
         private set
 
@@ -101,6 +103,10 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         initialize()
+    }
+
+    fun updateSession(newSession: AuthSession?) {
+        currentSession = newSession
     }
 
     fun retryInitialization() {
@@ -171,9 +177,10 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                     }
 
                 val cachedSession = authRepo.getCachedSession()
-                AppDependencies(authRepo, inventoryRepo, commandRepo, cachedSession)
+                AppDependencies(authRepo, inventoryRepo, commandRepo) to cachedSession
             }
-            state = InitialState.Ready(dependencies)
+            currentSession = dependencies.second
+            state = InitialState.Ready(dependencies.first)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -197,8 +204,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
 data class AppDependencies(
     val authRepository: AuthRepository,
     val inventoryRepository: AnimalInventoryRepository,
-    val commandRepository: AnimalCommandRepository,
-    val cachedSession: AuthSession?
+    val commandRepository: AnimalCommandRepository
 )
 
 sealed interface InitialState {
@@ -236,7 +242,8 @@ private fun MainApp(
                 authRepository = state.dependencies.authRepository,
                 inventoryRepository = state.dependencies.inventoryRepository,
                 commandRepository = state.dependencies.commandRepository,
-                initialSession = state.dependencies.cachedSession
+                session = viewModel.currentSession,
+                onSessionChange = { viewModel.updateSession(it) }
             )
         }
         is InitialState.Error -> {
@@ -339,9 +346,9 @@ fun AppNavigation(
     authRepository: AuthRepository,
     inventoryRepository: AnimalInventoryRepository,
     commandRepository: AnimalCommandRepository,
-    initialSession: AuthSession?
+    session: AuthSession?,
+    onSessionChange: (AuthSession?) -> Unit
 ) {
-    var session by remember { mutableStateOf<AuthSession?>(initialSession) }
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
     }
@@ -459,7 +466,7 @@ fun AppNavigation(
                     session = session!!,
                     onLogoutClick = {
                         authRepository.logout()
-                        session = null
+                        onSessionChange(null)
                         detailBackStack = emptyList()
                         returnToDetailId = null
                         inventoryTabIndex = 0
@@ -495,7 +502,7 @@ fun AppNavigation(
                     isLoading = false
                     result.fold(
                         onSuccess = { newSession ->
-                            session = newSession
+                            onSessionChange(newSession)
                         },
                         onFailure = { error ->
                             errorMessage = error.message ?: "No se pudo iniciar sesión. Inténtalo de nuevo."

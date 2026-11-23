@@ -43,6 +43,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -126,6 +127,7 @@ fun AnimalFormScreen(
     var draftCreatedPhotos by rememberSaveable(
         stateSaver = listSaver(save = { it }, restore = { it })
     ) { mutableStateOf(emptyList<String>()) }
+    var committedPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
     var hasLoadedExisting by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(false) }
     var isCompressingPhoto by remember { mutableStateOf(false) }
 
@@ -135,6 +137,8 @@ fun AnimalFormScreen(
     var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingExisting by remember { mutableStateOf(true) }
+    var initLoadFailed by remember { mutableStateOf(false) }
+    var initRetryTrigger by remember { mutableIntStateOf(0) }
 
     var breedExpanded by remember { mutableStateOf(false) }
     var lifeStageExpanded by remember { mutableStateOf(false) }
@@ -143,9 +147,11 @@ fun AnimalFormScreen(
     var sireExpanded by remember { mutableStateOf(false) }
 
     val handleCancelAndCleanup: () -> Unit = {
-        draftCreatedPhotos.forEach { path ->
-            deletePendingPhotoIfOwned(context.filesDir, path)
-        }
+        draftCreatedPhotos
+            .filter { it != committedPhotoPath }
+            .forEach { path ->
+                deletePendingPhotoIfOwned(context.filesDir, path)
+            }
         draftCreatedPhotos = emptyList()
         onNavigateBack()
     }
@@ -155,8 +161,10 @@ fun AnimalFormScreen(
     }
 
     // Load parental dropdowns and existing animal if editing
-    LaunchedEffect(ranchId, animalIdToEdit) {
+    LaunchedEffect(ranchId, animalIdToEdit, initRetryTrigger) {
         isLoadingExisting = true
+        initLoadFailed = false
+        errorMessage = null
         try {
             damsList = commandRepository.getPotentialDams(ranchId)
             siresList = commandRepository.getPotentialSires(ranchId)
@@ -189,6 +197,9 @@ fun AnimalFormScreen(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: Exception) {
+            initLoadFailed = true
+            errorMessage = e.message ?: "Error al cargar los datos del formulario."
         } finally {
             isLoadingExisting = false
         }
@@ -267,6 +278,33 @@ fun AnimalFormScreen(
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = BaappPrimaryGreen)
+            }
+        } else if (initLoadFailed) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(BaappBackground)
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = errorMessage ?: "Error al cargar los datos del formulario.",
+                        color = Color(0xFFB71C1C),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Button(
+                        onClick = { initRetryTrigger++ },
+                        modifier = Modifier.heightIn(min = 56.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                    ) {
+                        Text("Reintentar")
+                    }
+                }
             }
         } else {
             Column(
@@ -740,8 +778,9 @@ fun AnimalFormScreen(
                             isSaving = false
                             when (res) {
                                 is AnimalSaveResult.Success -> {
+                                    committedPhotoPath = localPhotoPath
                                     draftCreatedPhotos
-                                        .filterNot { it == localPhotoPath }
+                                        .filter { it != localPhotoPath && it != committedPhotoPath }
                                         .forEach { obsolete -> deletePendingPhotoIfOwned(context.filesDir, obsolete) }
                                     draftCreatedPhotos = emptyList()
                                     onNavigateBack()
@@ -758,7 +797,7 @@ fun AnimalFormScreen(
                             }
                         }
                     },
-                    enabled = !isSaving && !isCompressingPhoto,
+                    enabled = !isSaving && !isCompressingPhoto && !isLoadingExisting && !initLoadFailed,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 56.dp),

@@ -97,15 +97,13 @@ class TokenRefreshInterceptor(
                 if (generationMatches) {
                     if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession!!.accessToken.isNotBlank()) {
                         request.header(HttpHeaders.Authorization, "Bearer ${capturedSession.accessToken}")
-                        if (existingProvenance == null) {
-                            request.attributes.put(
-                                INJECTED_CREDENTIALS_KEY,
-                                InjectedCredentials(
-                                    sessionId = capturedSession.sessionId,
-                                    accessToken = capturedSession.accessToken
-                                )
+                        request.attributes.put(
+                            INJECTED_CREDENTIALS_KEY,
+                            InjectedCredentials(
+                                sessionId = capturedSession.sessionId,
+                                accessToken = capturedSession.accessToken
                             )
-                        }
+                        )
                     }
                     if (!request.headers.contains(HEADER_ACTIVE_RANCH_ID) && !capturedSession!!.ranchId.isNullOrBlank()) {
                         request.header(HEADER_ACTIVE_RANCH_ID, capturedSession.ranchId)

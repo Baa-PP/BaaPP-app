@@ -375,4 +375,100 @@ class SqlDelightAnimalCommandRepositoryTest {
         assertIs<AnimalSaveResult.Error>(result)
         assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
     }
+
+    @Test
+    fun testWeaningDateEarlierThanBirthDateRejected() = runTest {
+        val form = AnimalFormState(
+            ranchId = "ranch-date",
+            folioInterno = "WEAN-1",
+            color = "Blanco",
+            birthDate = "2026-03-10",
+            weaningDate = "2026-03-01"
+        )
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(form))
+
+        val equalDate = form.copy(weaningDate = "2026-03-10")
+        assertIs<AnimalSaveResult.Success>(repository.saveAnimalOffline(equalDate))
+    }
+
+    @Test
+    fun testMultiHopAncestryCycleRejectedAndEditPreservesRanchId() = runTest {
+        val ranchId = "ranch-cycle"
+        val grandDamId = UuidV7.generate()
+        val damId = UuidV7.generate()
+
+        database.oviAppDatabaseQueries.insertAnimal(
+            id = grandDamId,
+            ranch_id = ranchId,
+            folio_interno = "GRAND-1",
+            siniiga_chip = null,
+            registro_uno = null,
+            adn = null,
+            breed = "Pelifolk",
+            color = "Blanco",
+            sex = Sex.FEMALE.name,
+            birth_date = "2020-01-01",
+            weaning_date = null,
+            parturition_type = ParturitionType.SIMPLE.name,
+            conception_method = ConceptionMethod.MN.name,
+            sire_id = null,
+            dam_id = null,
+            external_sire_folio = null,
+            external_dam_folio = null,
+            entry_reason = EntryReason.BIRTH.name,
+            criador_name = null,
+            photo_s3_key = null,
+            birth_event_id = null,
+            mortality_date = null,
+            mortality_cause = null,
+            life_stage = LifeStage.ADULT.name,
+            reproductive_status = ReproductiveStatus.EMPTY.name,
+            status = "ACTIVE",
+            updated_at = "2025-01-01T00:00:00Z"
+        )
+        database.oviAppDatabaseQueries.insertAnimal(
+            id = damId,
+            ranch_id = ranchId,
+            folio_interno = "DAM-1",
+            siniiga_chip = null,
+            registro_uno = null,
+            adn = null,
+            breed = "Pelifolk",
+            color = "Blanco",
+            sex = Sex.FEMALE.name,
+            birth_date = "2022-01-01",
+            weaning_date = null,
+            parturition_type = ParturitionType.SIMPLE.name,
+            conception_method = ConceptionMethod.MN.name,
+            sire_id = null,
+            dam_id = grandDamId,
+            external_sire_folio = null,
+            external_dam_folio = null,
+            entry_reason = EntryReason.BIRTH.name,
+            criador_name = null,
+            photo_s3_key = null,
+            birth_event_id = null,
+            mortality_date = null,
+            mortality_cause = null,
+            life_stage = LifeStage.ADULT.name,
+            reproductive_status = ReproductiveStatus.EMPTY.name,
+            status = "ACTIVE",
+            updated_at = "2025-01-01T00:00:00Z"
+        )
+
+        // Setting grandDam's damId = damId creates a 2-hop cycle (grandDam -> dam -> grandDam)
+        val cyclicEdit = AnimalFormState(
+            id = grandDamId,
+            ranchId = ranchId,
+            folioInterno = "GRAND-1",
+            color = "Blanco",
+            birthDate = "2020-01-01",
+            damId = damId
+        )
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(cyclicEdit))
+
+        // Attempting to edit with a mismatched ranchId is rejected
+        val wrongRanchEdit = cyclicEdit.copy(ranchId = "other-ranch", damId = null)
+        assertIs<AnimalSaveResult.Error>(repository.saveAnimalOffline(wrongRanchEdit))
+    }
 }

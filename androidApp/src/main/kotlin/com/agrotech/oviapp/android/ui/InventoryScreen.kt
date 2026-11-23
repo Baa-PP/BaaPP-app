@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.android.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -135,6 +136,8 @@ fun InventoryScreen(
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
+    BackHandler(onBack = onBackClick)
+
     // Reload list when tab, search, or filters change (or initial load retry)
     LaunchedEffect(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, initialRetryTrigger) {
         val requestGeneration = ++activeRequestGeneration
@@ -142,6 +145,9 @@ fun InventoryScreen(
         loadError = null
         currentOffset = 0L
         canLoadMore = true
+        ewesList = emptyList()
+        ramsList = emptyList()
+        lambsList = emptyList()
         try {
             when (currentTab) {
                 InventoryTab.EWES -> {
