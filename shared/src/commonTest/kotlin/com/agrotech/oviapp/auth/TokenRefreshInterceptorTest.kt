@@ -292,7 +292,11 @@ class TokenRefreshInterceptorTest {
         )
         storage.saveSession(initialSession)
 
+        val refreshCallCount = AtomicInteger(0)
+        val resourceCallCount = AtomicInteger(0)
+
         val resourceEngine = MockEngine { _ ->
+            resourceCallCount.incrementAndGet()
             respond(
                 content = """{"error":"Unauthorized"}""",
                 status = HttpStatusCode.Unauthorized,
@@ -302,6 +306,7 @@ class TokenRefreshInterceptorTest {
 
         // Refresh returns 200 OK but with empty/missing token fields (e.g. malformed JSON response)
         val refreshEngine = MockEngine { _ ->
+            refreshCallCount.incrementAndGet()
             respond(
                 content = """{"data": null, "accessToken": ""}""",
                 status = HttpStatusCode.OK,
@@ -327,6 +332,8 @@ class TokenRefreshInterceptorTest {
         val response = apiClient.get("https://du6aq4me7fp0q.cloudfront.net/api/v1/animals")
 
         assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertEquals(1, refreshCallCount.get(), "Expected exactly one refresh call")
+        assertEquals(1, resourceCallCount.get(), "Expected exactly one resource call (no retry on empty token)")
         // Missing token fields on 200 OK must NOT clear the stored session!
         assertTrue(storage.hasSession(), "Session must NOT be cleared when 200 response has missing token fields")
         assertEquals("current-token", storage.getSession()?.accessToken)
@@ -641,27 +648,84 @@ class TokenRefreshInterceptorTest {
     }
 
     @Test
-    fun testAtomicGenerationMutationRejectsStaleSessionUpdates() {
+    fun testAtomicGenerationMutationRejectsStaleSessionUpdates() = runTest {
         val storage = FakeSessionStorage()
-        val sess2 = AuthSession(
-            accessToken = "tok-2",
-            refreshToken = "ref-2",
+        val sess1 = AuthSession(
+            accessToken = "expired-tok-1",
+            refreshToken = "ref-1",
+            username = "user1",
+            role = "OWNER",
+            sessionId = "sess-1"
+        )
+        storage.saveSession(sess1)
+
+        // Mismatched sessionId / refreshToken direct unit checks
+        assertFalse(storage.updateSessionIfMatches("sess-0", "ref-1", "expired-tok-1") { it.copy(accessToken = "stale-tok") })
+        assertFalse(storage.clearSessionIfMatches("sess-0", "ref-1", "expired-tok-1"))
+        assertFalse(storage.updateSessionIfMatches("sess-1", "wrong-ref", "expired-tok-1") { it.copy(accessToken = "stale-tok") })
+        assertFalse(storage.clearSessionIfMatches("sess-1", "wrong-ref", "expired-tok-1"))
+        assertFalse(storage.updateSessionIfMatches("sess-1", "ref-1", "wrong-access") { it.copy(accessToken = "stale-tok") })
+
+        // Now test through the interceptor: pause refresh while storage switches to another account
+        val refreshStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val allowRefreshComplete = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        var apiCalls = 0
+        val apiEngine = MockEngine { request ->
+            apiCalls++
+            respondError(HttpStatusCode.Unauthorized)
+        }
+
+        val refreshEngine = MockEngine { request ->
+            refreshStarted.complete(Unit)
+            allowRefreshComplete.await()
+            respond(
+                content = """{"accessToken":"stale-new-token","refreshToken":"stale-new-refresh"}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json")
+            )
+        }
+
+        val apiClient = HttpClient(apiEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val refreshClient = HttpClient(refreshEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://api.baapp.mx/api/v1",
+            refreshClient = refreshClient
+        ).attachTo(apiClient)
+
+        val requestJob = async {
+            apiClient.get("https://api.baapp.mx/api/v1/animals")
+        }
+
+        refreshStarted.await()
+
+        // Account is replaced while refresh is in-flight
+        val replacementSession = AuthSession(
+            accessToken = "replacement-token",
+            refreshToken = "replacement-refresh",
             username = "user2",
             role = "OWNER",
             sessionId = "sess-2"
         )
-        storage.saveSession(sess2)
+        storage.saveSession(replacementSession)
 
-        // Mismatched sessionId is rejected
-        assertFalse(storage.updateSessionIfMatches("sess-1", "ref-2") { it.copy(accessToken = "stale-tok") })
-        assertFalse(storage.clearSessionIfMatches("sess-1", "ref-2"))
+        allowRefreshComplete.complete(Unit)
+        val response = requestJob.await()
 
-        // Same sessionId but outdated refreshToken (e.g. rotated by another interceptor) is rejected
-        assertFalse(storage.updateSessionIfMatches("sess-2", "ref-1") { it.copy(accessToken = "stale-tok") })
-        assertFalse(storage.clearSessionIfMatches("sess-2", "ref-1"))
+        // Original request must return 401 Unauthorized without being replayed against replacement account
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertEquals(1, apiCalls, "Original request must not be replayed across accounts")
 
-        assertEquals("tok-2", storage.getSession()?.accessToken)
+        // Replacement session remains completely intact
+        assertEquals("replacement-token", storage.getSession()?.accessToken)
         assertEquals("sess-2", storage.getSession()?.sessionId)
+        assertEquals("user2", storage.getSession()?.username)
     }
 
     @Test
@@ -768,5 +832,97 @@ class TokenRefreshInterceptorTest {
         assertEquals(HttpStatusCode.OK, response.status)
         assertFalse(refreshCalled, "Should recover using the already-refreshed token in storage")
         assertEquals(listOf<String?>("Bearer old-token", "Bearer refreshed-token"), observedTokensOnTarget)
+    }
+
+    @Test
+    fun testMissingRefreshTokenReturns401WithoutClearingSession() = runTest {
+        val storage = FakeSessionStorage()
+        storage.saveSession(
+            AuthSession(
+                accessToken = "expired-token",
+                refreshToken = null,
+                username = "owner",
+                role = "OWNER",
+                sessionId = "sess-1"
+            )
+        )
+
+        val apiClient = HttpClient(MockEngine { _ -> respondError(HttpStatusCode.Unauthorized) }) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val refreshClient = HttpClient(MockEngine { _ -> respond("", HttpStatusCode.OK) }) {
+            install(ContentNegotiation) { json(json) }
+        }
+
+        TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://api.baapp.mx/api/v1",
+            refreshClient = refreshClient
+        ).attachTo(apiClient)
+
+        val response = apiClient.get("https://api.baapp.mx/api/v1/animals")
+        assertEquals(HttpStatusCode.Unauthorized, response.status)
+        assertTrue(storage.hasSession(), "Missing refresh token must preserve session for offline access")
+    }
+
+    @Test
+    fun testRedirectStopsWhenSessionGenerationChangesAcrossHop() = runTest {
+        val storage = FakeSessionStorage()
+        storage.saveSession(
+            AuthSession(
+                accessToken = "token-a",
+                refreshToken = "ref-a",
+                username = "userA",
+                role = "OWNER",
+                sessionId = "sess-a"
+            )
+        )
+
+        var targetReached = false
+        val apiEngine = MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/v1/start" -> {
+                    // Account switches while redirect is in progress
+                    storage.saveSession(
+                        AuthSession(
+                            accessToken = "token-b",
+                            refreshToken = "ref-b",
+                            username = "userB",
+                            role = "OWNER",
+                            sessionId = "sess-b"
+                        )
+                    )
+                    respond(
+                        content = "",
+                        status = HttpStatusCode.Found,
+                        headers = headersOf(HttpHeaders.Location, "https://api.baapp.mx/api/v1/next")
+                    )
+                }
+                "/api/v1/next" -> {
+                    targetReached = true
+                    respond("""{"ok":true}""", HttpStatusCode.OK)
+                }
+                else -> respond("", HttpStatusCode.NotFound)
+            }
+        }
+
+        val client = HttpClient(apiEngine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val refreshClient = HttpClient(MockEngine { _ -> respond("", HttpStatusCode.OK) })
+        TokenRefreshInterceptor(
+            sessionStorage = storage,
+            baseUrl = "https://api.baapp.mx/api/v1",
+            refreshClient = refreshClient
+        ).attachTo(client)
+
+        var threw = false
+        try {
+            client.get("https://api.baapp.mx/api/v1/start")
+        } catch (_: IllegalStateException) {
+            threw = true
+        }
+        assertTrue(threw, "Redirect chain must stop when session generation changes")
+        assertFalse(targetReached, "Redirect target must not be reached after generation mismatch")
     }
 }

@@ -70,33 +70,51 @@ class TokenRefreshInterceptor(
             val isAuthEndpoint = request.url.encodedPath.contains("/auth/")
 
             // 1. Add credentials only if request matches baseUrl's origin and is not an auth endpoint.
-            // Strip credentials on foreign-origin hops while preserving immutable initiating provenance.
-            val capturedSession = if (matchesOrigin && !isAuthEndpoint) sessionStorage.getSession() else null
+            // Retain the initiating account generation independently of INJECTED_CREDENTIALS_KEY across every redirect hop.
+            val currentSessionForHop = sessionStorage.getSession()
+            val existingInitiatingSessionId = request.attributes.getOrNull(INITIATING_SESSION_ID_KEY)
+            if (existingInitiatingSessionId != null && currentSessionForHop?.sessionId != existingInitiatingSessionId) {
+                request.headers.remove(HttpHeaders.Authorization)
+                request.headers.remove(HEADER_ACTIVE_RANCH_ID)
+                request.attributes.remove(INJECTED_CREDENTIALS_KEY)
+                throw IllegalStateException("Session generation changed during redirect")
+            }
+
+            val capturedSession = if (matchesOrigin && !isAuthEndpoint) currentSessionForHop else null
             val existingProvenance = request.attributes.getOrNull(INJECTED_CREDENTIALS_KEY)
+            if (existingInitiatingSessionId == null && capturedSession != null) {
+                request.attributes.put(INITIATING_SESSION_ID_KEY, capturedSession.sessionId)
+            }
 
             if (!matchesOrigin) {
                 request.headers.remove(HEADER_ACTIVE_RANCH_ID)
                 if (existingProvenance != null) {
                     request.headers.remove(HttpHeaders.Authorization)
                 }
-            } else if (!isAuthEndpoint && capturedSession != null) {
-                val generationMatches = existingProvenance == null ||
-                    existingProvenance.sessionId == capturedSession.sessionId
+            } else if (!isAuthEndpoint) {
+                val generationMatches = capturedSession != null &&
+                    (existingProvenance == null || existingProvenance.sessionId == capturedSession.sessionId)
                 if (generationMatches) {
-                    if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession.accessToken.isNotBlank()) {
+                    if (!request.headers.contains(HttpHeaders.Authorization) && capturedSession!!.accessToken.isNotBlank()) {
                         request.header(HttpHeaders.Authorization, "Bearer ${capturedSession.accessToken}")
-                        if (existingProvenance == null) {
-                            request.attributes.put(
-                                INJECTED_CREDENTIALS_KEY,
-                                InjectedCredentials(
-                                    sessionId = capturedSession.sessionId,
-                                    accessToken = capturedSession.accessToken
-                                )
+                        request.attributes.put(
+                            INJECTED_CREDENTIALS_KEY,
+                            InjectedCredentials(
+                                sessionId = capturedSession.sessionId,
+                                accessToken = capturedSession.accessToken
                             )
-                        }
+                        )
                     }
-                    if (!request.headers.contains(HEADER_ACTIVE_RANCH_ID) && !capturedSession.ranchId.isNullOrBlank()) {
+                    if (!request.headers.contains(HEADER_ACTIVE_RANCH_ID) && !capturedSession!!.ranchId.isNullOrBlank()) {
                         request.header(HEADER_ACTIVE_RANCH_ID, capturedSession.ranchId)
+                    }
+                } else {
+                    // capturedSession is absent or existingProvenance indicates a different session generation:
+                    // Remove interceptor-injected credentials
+                    if (existingProvenance != null) {
+                        request.headers.remove(HttpHeaders.Authorization)
+                        request.headers.remove(HEADER_ACTIVE_RANCH_ID)
+                        request.attributes.remove(INJECTED_CREDENTIALS_KEY)
                     }
                 }
             }
@@ -117,8 +135,8 @@ class TokenRefreshInterceptor(
                     val currentSession = sessionStorage.getSession()
 
                     when {
-                        // No session or missing origin session
-                        originSessionId == null || originAccessToken == null || currentSession == null -> {
+                        // No session or missing origin session (blank originSessionId is treated as having no matching session)
+                        originSessionId.isNullOrBlank() || originAccessToken == null || currentSession == null -> {
                             false
                         }
                         // Replacement account has taken over: do not replay request across accounts!
@@ -133,9 +151,8 @@ class TokenRefreshInterceptor(
                         currentSession.accessToken != tokenUsed && currentSession.accessToken.isNotBlank() -> {
                             true
                         }
-                        // Stored refresh token is missing or blank
+                        // Stored refresh token is missing or blank: return original 401 without clearing session (preserve offline access)
                         currentSession.refreshToken.isNullOrBlank() -> {
-                            sessionStorage.clearSessionIfMatches(originSessionId, currentSession.refreshToken)
                             false
                         }
                         // Need to call POST /api/v1/auth/refresh
@@ -197,8 +214,12 @@ class TokenRefreshInterceptor(
                 response.status == HttpStatusCode.Unauthorized ||
                 response.status == HttpStatusCode.Forbidden ||
                 response.status == HttpStatusCode.BadRequest -> {
-                    // Atomically invalidate only if stored session & submitted refresh token still match
-                    sessionStorage.clearSessionIfMatches(initialSession.sessionId, refreshToken)
+                    // Atomically invalidate only if stored session & submitted snapshot still match
+                    sessionStorage.clearSessionIfMatches(
+                        expectedSessionId = initialSession.sessionId,
+                        expectedRefreshToken = refreshToken,
+                        expectedAccessToken = initialSession.accessToken
+                    )
                     false
                 }
                 response.status.isSuccess() -> {
@@ -207,7 +228,11 @@ class TokenRefreshInterceptor(
                     if (newAccessToken != null) {
                         val newRefreshToken = refreshResponse.resolveRefreshToken()?.takeIf { it.isNotBlank() }
                             ?: initialSession.refreshToken
-                        sessionStorage.updateSessionIfMatches(initialSession.sessionId, refreshToken) { stored ->
+                        sessionStorage.updateSessionIfMatches(
+                            expectedSessionId = initialSession.sessionId,
+                            expectedRefreshToken = refreshToken,
+                            expectedAccessToken = initialSession.accessToken
+                        ) { stored ->
                             stored.copy(
                                 accessToken = newAccessToken,
                                 refreshToken = newRefreshToken
@@ -242,6 +267,8 @@ class TokenRefreshInterceptor(
 
     companion object {
         const val HEADER_ACTIVE_RANCH_ID = "X-Active-Ranch-Id"
+        private val INITIATING_SESSION_ID_KEY =
+            AttributeKey<String>("TokenRefreshInitiatingSessionId")
         private val INJECTED_CREDENTIALS_KEY =
             AttributeKey<InjectedCredentials>("TokenRefreshInjectedCredentials")
 
@@ -264,23 +291,44 @@ class TokenRefreshInterceptor(
         fun createAuthenticatedClient(
             sessionStorage: SessionStorage,
             baseUrl: String = KtorAuthService.DEFAULT_BASE_URL,
-            refreshClient: HttpClient = createDefaultRefreshClient()
+            refreshClient: HttpClient? = null
         ): HttpClient {
-            val client = HttpClient {
-                install(ContentNegotiation) {
-                    json(Json {
-                        ignoreUnknownKeys = true
-                        isLenient = true
-                        coerceInputValues = true
-                    })
+            KtorAuthService.enforceHttps(baseUrl)
+
+            val effectiveRefreshClient = refreshClient ?: createDefaultRefreshClient()
+            val ownsRefreshClient = (refreshClient == null)
+
+            var clientCreated: HttpClient? = null
+            var interceptorCreated: TokenRefreshInterceptor? = null
+
+            try {
+                val client = HttpClient {
+                    install(ContentNegotiation) {
+                        json(Json {
+                            ignoreUnknownKeys = true
+                            isLenient = true
+                            coerceInputValues = true
+                        })
+                    }
                 }
+                clientCreated = client
+
+                val interceptor = TokenRefreshInterceptor(sessionStorage, baseUrl, effectiveRefreshClient)
+                interceptorCreated = interceptor
+                interceptor.attachTo(client)
+
+                client.coroutineContext[Job]?.invokeOnCompletion {
+                    interceptor.close()
+                }
+                return client
+            } catch (t: Throwable) {
+                clientCreated?.close()
+                interceptorCreated?.close()
+                if (ownsRefreshClient) {
+                    effectiveRefreshClient.close()
+                }
+                throw t
             }
-            val interceptor = TokenRefreshInterceptor(sessionStorage, baseUrl, refreshClient)
-            interceptor.attachTo(client)
-            client.coroutineContext[Job]?.invokeOnCompletion {
-                interceptor.close()
-            }
-            return client
         }
     }
 }

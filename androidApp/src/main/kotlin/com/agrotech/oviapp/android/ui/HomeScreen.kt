@@ -57,6 +57,8 @@ private val BaappWarningText = Color(0xFF8D6E00)
 fun HomeScreen(
     session: AuthSession,
     onLogoutClick: () -> Unit,
+    onOpenInventoryClick: () -> Unit = {},
+    onOpenRegisterAnimalClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -200,7 +202,13 @@ fun HomeScreen(
                         ) {
                             if (capabilities.canReadInventory) {
                                 OutlinedButton(
-                                    onClick = { showUpcomingNotice("Consulta de inventario disponible en APP-06") },
+                                    onClick = {
+                                        if (session.ranchId.isNullOrBlank()) {
+                                            showUpcomingNotice("No tienes un rancho asignado para consultar inventario.")
+                                        } else {
+                                            onOpenInventoryClick()
+                                        }
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .heightIn(min = 56.dp),
@@ -212,7 +220,13 @@ fun HomeScreen(
 
                             if (capabilities.canCapture) {
                                 Button(
-                                    onClick = { showUpcomingNotice("Alta de ejemplar disponible en APP-06") },
+                                    onClick = {
+                                        if (session.ranchId.isNullOrBlank()) {
+                                            showUpcomingNotice("No tienes un rancho asignado para registrar ejemplares.")
+                                        } else {
+                                            onOpenRegisterAnimalClick()
+                                        }
+                                    },
                                     modifier = Modifier
                                         .weight(1f)
                                         .heightIn(min = 56.dp),
@@ -225,12 +239,18 @@ fun HomeScreen(
                         }
                     }
 
-                    if (capabilities.canEditGeneralRecords) {
+                    if (capabilities.canEditGeneralRecords && capabilities.canReadInventory) {
                         if (capabilities.canReadInventory || capabilities.canCapture) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
                         OutlinedButton(
-                            onClick = { showUpcomingNotice("Edición de ficha/arete disponible en APP-06") },
+                            onClick = {
+                                if (session.ranchId.isNullOrBlank()) {
+                                    showUpcomingNotice("No tienes un rancho asignado para editar ejemplares.")
+                                } else {
+                                    onOpenInventoryClick()
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 56.dp),
