@@ -193,8 +193,11 @@ fun BirthEventScreen(
                     onResetSaveState()
                     onNavigateBack()
                 } catch (e: CancellationException) {
-                    isCancelling = false
                     throw e
+                } catch (e: Exception) {
+                    errorMessage = e.message ?: "No se pudo verificar si las fotos temporales están en uso. Intenta cancelar de nuevo."
+                } finally {
+                    isCancelling = false
                 }
             }
         }
@@ -659,7 +662,7 @@ fun BirthEventScreen(
                             ) {
                                 OutlinedButton(
                                     onClick = { photoPickerLauncher.launch("image/*") },
-                                    enabled = !isCompressingPhoto && !isSaving,
+                                    enabled = !isCompressingPhoto && !isSaving && !isCancelling,
                                     modifier = Modifier.heightIn(min = 56.dp),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
@@ -713,7 +716,7 @@ fun BirthEventScreen(
                             )
                             onSaveBirthEvent(draftKey, draft, LocalDate.now().toString())
                         },
-                        enabled = !isSaving && !isCompressingPhoto,
+                        enabled = !isSaving && !isCompressingPhoto && !isCancelling,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 56.dp),
