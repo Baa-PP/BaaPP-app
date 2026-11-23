@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.android
 
+import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,11 +24,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +36,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import app.cash.sqldelight.db.SqlDriver
+import com.agrotech.oviapp.android.ui.BirthEventScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
 import com.agrotech.oviapp.android.ui.theme.OviTheme
@@ -42,6 +48,12 @@ import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
 import com.agrotech.oviapp.auth.domain.AuthRepository
 import com.agrotech.oviapp.auth.domain.AuthSession
+import com.agrotech.oviapp.births.data.BirthDatabaseDriverFactory
+import com.agrotech.oviapp.births.data.SqlDelightBirthEventRepository
+import com.agrotech.oviapp.births.domain.model.BirthEventDraft
+import com.agrotech.oviapp.births.domain.model.BirthSaveResult
+import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
+import com.agrotech.oviapp.db.OviAppDatabase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -51,97 +63,179 @@ private val BaappPrimaryGreen = Color(0xFF1B5E20)
 
 class MainActivity : ComponentActivity() {
 
-    private val repositoryLock = Any()
-    private var isDestroyed = false
-    private var activeRepository: AuthRepository? = null
-
-    /**
-     * Synchronizes repository ownership between initialization and destruction.
-     * If destruction occurred before publication, closes the repository immediately.
-     */
-    private fun publishOrClose(repository: AuthRepository): Boolean {
-        synchronized(repositoryLock) {
-            if (isDestroyed) {
-                repository.close()
-                return false
-            }
-            activeRepository = repository
-            return true
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val viewModel = ViewModelProvider(
+            this,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+        )[MainAppViewModel::class.java]
 
         setContent {
             OviTheme {
                 Surface {
-                    MainApp(
-                        onInitRepository = {
-                            val sessionStorage = AndroidEncryptedSessionStorage(applicationContext)
-                            val authService = KtorAuthService()
-                            val repository = AuthRepository(authService, sessionStorage)
-
-                            var publicationKept = false
-                            try {
-                                val cachedSession = repository.getCachedSession()
-                                val published = publishOrClose(repository)
-                                if (published) {
-                                    publicationKept = true
-                                    repository to cachedSession
-                                } else {
-                                    null
-                                }
-                            } finally {
-                                if (!publicationKept) {
-                                    repository.close()
-                                }
-                            }
-                        },
-                        onResetStorage = {
-                            applicationContext.deleteSharedPreferences("baapp_secure_session_prefs")
-                        }
-                    )
+                    MainApp(viewModel = viewModel)
                 }
             }
         }
     }
+}
 
-    override fun onDestroy() {
-        super.onDestroy()
-        val repositoryToClose = synchronized(repositoryLock) {
-            isDestroyed = true
-            activeRepository.also { activeRepository = null }
-        }
-        repositoryToClose?.close()
+class MainAppViewModel(application: Application) : AndroidViewModel(application) {
+    var state by mutableStateOf<InitialState>(InitialState.Loading)
+        private set
+    var currentSession by mutableStateOf<AuthSession?>(null)
+        private set
+    var isBusy by mutableStateOf(false)
+        private set
+    var birthSaveState by mutableStateOf<BirthSaveUiState>(BirthSaveUiState.Idle)
+        private set
+
+    private val lifecycleLock = Any()
+    private var isCleared = false
+    private var cachedDriver: SqlDriver? = null
+    private var cachedDatabase: OviAppDatabase? = null
+    private var cachedAuthRepository: AuthRepository? = null
+    private var cachedBirthEventRepository: BirthEventRepository? = null
+
+    init {
+        initialize()
     }
-}
 
-private sealed interface InitialState {
-    data object Loading : InitialState
-    data class Ready(val repository: AuthRepository, val cachedSession: AuthSession?) : InitialState
-    data class Error(val message: String) : InitialState
-}
+    fun updateSession(newSession: AuthSession?) {
+        currentSession = newSession
+    }
 
-@Composable
-private fun MainApp(
-    onInitRepository: suspend () -> Pair<AuthRepository, AuthSession?>?,
-    onResetStorage: suspend () -> Boolean
-) {
-    var state by remember { mutableStateOf<InitialState>(InitialState.Loading) }
-    var retryKey by remember { mutableStateOf(0) }
-    var isBusy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    fun retryInitialization() {
+        if (isBusy) return
+        initialize()
+    }
 
-    LaunchedEffect(retryKey) {
+    fun resetStorageAndRetry() {
+        if (isBusy) return
+        isBusy = true
+        viewModelScope.launch {
+            try {
+                val deleted = withContext(Dispatchers.IO) {
+                    getApplication<Application>().deleteSharedPreferences("baapp_secure_session_prefs")
+                }
+                if (deleted) {
+                    val toClose = synchronized(lifecycleLock) {
+                        val old = cachedAuthRepository
+                        cachedAuthRepository = null
+                        old
+                    }
+                    toClose?.close()
+                    initializeInternal()
+                } else {
+                    state = InitialState.Error("No se pudo restablecer el almacenamiento seguro.")
+                    isBusy = false
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                state = InitialState.Error(e.message ?: "No se pudo restablecer el almacenamiento seguro.")
+                isBusy = false
+            }
+        }
+    }
+
+    fun saveBirthEvent(draftKey: String, draft: BirthEventDraft, todayDateIso: String) {
+        val repo = synchronized(lifecycleLock) {
+            if (isCleared) null else cachedBirthEventRepository
+        } ?: return
+        if (birthSaveState is BirthSaveUiState.Saving) return
+
+        birthSaveState = BirthSaveUiState.Saving(draftKey)
+        viewModelScope.launch {
+            try {
+                when (val res = repo.saveBirthEventOffline(draft, todayDateIso)) {
+                    is BirthSaveResult.Success -> {
+                        birthSaveState = BirthSaveUiState.Success(draftKey, draft.localPhotoPath)
+                    }
+                    is BirthSaveResult.DuplicateFolio -> {
+                        birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
+                    }
+                    is BirthSaveResult.ValidationError -> {
+                        birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
+                    }
+                    is BirthSaveResult.Error -> {
+                        birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                birthSaveState = BirthSaveUiState.Error(
+                    draftKey,
+                    e.message ?: "Error guardando el evento de parto."
+                )
+            }
+        }
+    }
+
+    fun resetBirthSaveState() {
+        birthSaveState = BirthSaveUiState.Idle
+    }
+
+    private fun initialize() {
+        isBusy = true
+        viewModelScope.launch {
+            initializeInternal()
+        }
+    }
+
+    private suspend fun initializeInternal() {
         state = InitialState.Loading
         try {
-            val result = withContext(Dispatchers.IO) {
-                onInitRepository()
-            }
-            if (result != null) {
-                state = InitialState.Ready(result.first, result.second)
-            }
+            val dependencies = withContext(Dispatchers.IO) {
+                val appContext = getApplication<Application>()
+                val sessionStorage = AndroidEncryptedSessionStorage(appContext)
+                val existingAuth = synchronized(lifecycleLock) {
+                    if (isCleared) return@withContext null
+                    cachedAuthRepository
+                }
+                val authRepo = existingAuth ?: AuthRepository(KtorAuthService(), sessionStorage)
+                val existingDriver = synchronized(lifecycleLock) {
+                    if (isCleared) null else cachedDriver
+                }
+                val newDriver = if (existingDriver == null) {
+                    BirthDatabaseDriverFactory(appContext).createDriver()
+                } else {
+                    null
+                }
+                val driver = existingDriver ?: newDriver!!
+
+                val published = synchronized(lifecycleLock) {
+                    if (isCleared) {
+                        false
+                    } else {
+                        if (cachedAuthRepository == null) cachedAuthRepository = authRepo
+                        if (cachedDriver == null) cachedDriver = driver
+                        true
+                    }
+                }
+                if (!published) {
+                    if (existingAuth == null) authRepo.close()
+                    newDriver?.close()
+                    return@withContext null
+                }
+
+                val birthRepo = synchronized(lifecycleLock) {
+                    if (isCleared) return@withContext null
+                    val db = cachedDatabase ?: OviAppDatabase(driver).also { cachedDatabase = it }
+                    cachedBirthEventRepository
+                        ?: SqlDelightBirthEventRepository(db).also {
+                            cachedBirthEventRepository = it
+                        }
+                }
+
+                val cachedSession = authRepo.getCachedSession()
+                AppDependencies(authRepo, birthRepo) to cachedSession
+            } ?: return
+            if (synchronized(lifecycleLock) { isCleared }) return
+            currentSession = dependencies.second
+            state = InitialState.Ready(dependencies.first)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -153,7 +247,47 @@ private fun MainApp(
         }
     }
 
-    when (val current = state) {
+    override fun onCleared() {
+        super.onCleared()
+        val (authToClose, driverToClose) = synchronized(lifecycleLock) {
+            isCleared = true
+            val auth = cachedAuthRepository
+            val driver = cachedDriver
+            cachedAuthRepository = null
+            cachedDriver = null
+            cachedDatabase = null
+            cachedBirthEventRepository = null
+            auth to driver
+        }
+        authToClose?.close()
+        driverToClose?.close()
+    }
+}
+
+sealed interface BirthSaveUiState {
+    data object Idle : BirthSaveUiState
+    data class Saving(val draftKey: String) : BirthSaveUiState
+    data class Success(val draftKey: String, val localPhotoPath: String?) : BirthSaveUiState
+    data class Error(val draftKey: String, val message: String) : BirthSaveUiState
+}
+
+data class AppDependencies(
+    val authRepository: AuthRepository,
+    val birthEventRepository: BirthEventRepository
+)
+
+sealed interface InitialState {
+    data object Loading : InitialState
+    data class Ready(val dependencies: AppDependencies) : InitialState
+    data class Error(val message: String) : InitialState
+}
+
+@Composable
+private fun MainApp(viewModel: MainAppViewModel) {
+    val state = viewModel.state
+    val isBusy = viewModel.isBusy
+
+    when (state) {
         is InitialState.Loading -> {
             Box(
                 modifier = Modifier
@@ -170,8 +304,13 @@ private fun MainApp(
         }
         is InitialState.Ready -> {
             AppNavigation(
-                authRepository = current.repository,
-                initialSession = current.cachedSession
+                authRepository = state.dependencies.authRepository,
+                birthEventRepository = state.dependencies.birthEventRepository,
+                session = viewModel.currentSession,
+                onSessionChange = { viewModel.updateSession(it) },
+                birthSaveState = viewModel.birthSaveState,
+                onSaveBirthEvent = { key, draft, today -> viewModel.saveBirthEvent(key, draft, today) },
+                onResetBirthSaveState = { viewModel.resetBirthSaveState() }
             )
         }
         is InitialState.Error -> {
@@ -201,18 +340,13 @@ private fun MainApp(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = current.message,
+                            text = state.message,
                             style = MaterialTheme.typography.bodyMedium.copy(color = Color.DarkGray),
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
-                            onClick = {
-                                if (!isBusy) {
-                                    isBusy = true
-                                    retryKey++
-                                }
-                            },
+                            onClick = { viewModel.retryInitialization() },
                             enabled = !isBusy,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -224,33 +358,7 @@ private fun MainApp(
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
-                            onClick = {
-                                if (!isBusy) {
-                                    isBusy = true
-                                    scope.launch {
-                                        try {
-                                            val deleted = withContext(Dispatchers.IO) {
-                                                onResetStorage()
-                                            }
-                                            if (deleted) {
-                                                retryKey++
-                                            } else {
-                                                state = InitialState.Error(
-                                                    "No se pudo restablecer el almacenamiento seguro."
-                                                )
-                                                isBusy = false
-                                            }
-                                        } catch (e: CancellationException) {
-                                            throw e
-                                        } catch (e: Throwable) {
-                                            state = InitialState.Error(
-                                                e.message ?: "No se pudo restablecer el almacenamiento seguro."
-                                            )
-                                            isBusy = false
-                                        }
-                                    }
-                                }
-                            },
+                            onClick = { viewModel.resetStorageAndRetry() },
                             enabled = !isBusy,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -269,22 +377,48 @@ private fun MainApp(
 @Composable
 fun AppNavigation(
     authRepository: AuthRepository,
-    initialSession: AuthSession?
+    birthEventRepository: BirthEventRepository,
+    session: AuthSession?,
+    onSessionChange: (AuthSession?) -> Unit,
+    birthSaveState: BirthSaveUiState = BirthSaveUiState.Idle,
+    onSaveBirthEvent: (String, BirthEventDraft, String) -> Unit = { _, _, _ -> },
+    onResetBirthSaveState: () -> Unit = {}
 ) {
-    var session by remember { mutableStateOf<AuthSession?>(initialSession) }
+    var showingBirthScreen by rememberSaveable { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     if (session != null) {
-        HomeScreen(
-            session = session!!,
-            onLogoutClick = {
-                authRepository.logout()
-                session = null
-                errorMessage = null
-            }
-        )
+        val currentRanchId = session.ranchId
+        val capabilities = session.uiCapabilities()
+        if (showingBirthScreen && !currentRanchId.isNullOrBlank() && capabilities.canCapture) {
+            BirthEventScreen(
+                ranchId = currentRanchId,
+                registeredByUsername = session.username,
+                birthEventRepository = birthEventRepository,
+                saveState = birthSaveState,
+                onSaveBirthEvent = onSaveBirthEvent,
+                onResetSaveState = onResetBirthSaveState,
+                onNavigateBack = { showingBirthScreen = false }
+            )
+        } else {
+            showingBirthScreen = false
+            HomeScreen(
+                session = session,
+                onLogoutClick = {
+                    authRepository.logout()
+                    onSessionChange(null)
+                    showingBirthScreen = false
+                    errorMessage = null
+                },
+                onOpenBirthEventClick = {
+                    if (!session.ranchId.isNullOrBlank() && capabilities.canCapture) {
+                        showingBirthScreen = true
+                    }
+                }
+            )
+        }
     } else {
         LoginScreen(
             isLoading = isLoading,
@@ -298,7 +432,7 @@ fun AppNavigation(
                     isLoading = false
                     result.fold(
                         onSuccess = { newSession ->
-                            session = newSession
+                            onSessionChange(newSession)
                         },
                         onFailure = { error ->
                             errorMessage = error.message ?: "No se pudo iniciar sesión. Inténtalo de nuevo."

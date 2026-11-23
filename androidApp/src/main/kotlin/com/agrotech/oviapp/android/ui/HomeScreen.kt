@@ -57,6 +57,7 @@ private val BaappWarningText = Color(0xFF8D6E00)
 fun HomeScreen(
     session: AuthSession,
     onLogoutClick: () -> Unit,
+    onOpenBirthEventClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -255,7 +256,13 @@ fun HomeScreen(
                 } else {
                     if (capabilities.canCapture) {
                         Button(
-                            onClick = { showUpcomingNotice("Registro de parto disponible en APP-12") },
+                            onClick = {
+                                if (session.ranchId.isNullOrBlank()) {
+                                    showUpcomingNotice("No tienes un rancho asignado para registrar nacimientos.")
+                                } else {
+                                    onOpenBirthEventClick()
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 56.dp),
