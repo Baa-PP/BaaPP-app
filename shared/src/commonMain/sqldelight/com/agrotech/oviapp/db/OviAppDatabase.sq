@@ -23,6 +23,7 @@ CREATE TABLE local_animals (
     mortality_date TEXT,
     mortality_cause TEXT,
     life_stage TEXT NOT NULL,
+    life_stage_at_death TEXT,
     reproductive_status TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -217,6 +218,25 @@ updateAnimalStatus:
 UPDATE local_animals
 SET status = :status, mortality_date = :mortalityDate, mortality_cause = :mortalityCause, updated_at = CURRENT_TIMESTAMP
 WHERE id = :id;
+
+-- APP-19: bajas sin borrado físico. Nunca hay DELETE sobre local_animals (NoPhysicalDeleteTest).
+markAnimalDeceased:
+UPDATE local_animals
+SET status = 'DECEASED', mortality_date = :mortalityDate, mortality_cause = :mortalityCause,
+    life_stage_at_death = :lifeStageAtDeath, updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE';
+
+markAnimalSold:
+UPDATE local_animals
+SET status = 'SOLD', updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE';
+
+selectMortalitySummary:
+SELECT mortality_cause, life_stage_at_death, COUNT(*) AS deaths
+FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'DECEASED' AND mortality_date BETWEEN :fromDate AND :toDate
+GROUP BY mortality_cause, life_stage_at_death
+ORDER BY deaths DESC, mortality_cause;
 
 -- Queries: local_birth_events (paginated & indexed)
 selectBirthEventsByRanchPaged:
