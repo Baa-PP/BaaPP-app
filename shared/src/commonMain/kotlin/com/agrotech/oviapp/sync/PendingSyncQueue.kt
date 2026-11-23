@@ -2,7 +2,7 @@ package com.agrotech.oviapp.sync
 
 import com.agrotech.oviapp.db.OviAppDatabase
 
-enum class SyncEntityType { ANIMAL, BIRTH_EVENT, WEIGHT_MEASUREMENT }
+enum class SyncEntityType { ANIMAL, BIRTH_EVENT, WEIGHT_MEASUREMENT, WEANING }
 
 enum class SyncOperation { CREATE, UPDATE }
 
