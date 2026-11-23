@@ -3,6 +3,8 @@ package com.agrotech.oviapp.animals.data
 import com.agrotech.oviapp.animals.domain.model.AnimalFormState
 import com.agrotech.oviapp.animals.domain.model.AnimalSaveResult
 import com.agrotech.oviapp.animals.domain.repository.AnimalCommandRepository
+import com.agrotech.oviapp.auth.domain.RanchAccessPolicy
+import com.agrotech.oviapp.auth.domain.SessionStorage
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.Animal
 import com.agrotech.oviapp.domain.model.AnimalStatus
@@ -23,7 +25,8 @@ import kotlinx.serialization.json.Json
 class SqlDelightAnimalCommandRepository(
     private val database: OviAppDatabase,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val clockMillis: () -> Long = ::currentEpochMillis
+    private val clockMillis: () -> Long = ::currentEpochMillis,
+    private val sessionStorage: SessionStorage? = null
 ) : AnimalCommandRepository {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -34,8 +37,18 @@ class SqlDelightAnimalCommandRepository(
             return@withContext AnimalSaveResult.ValidationError(validationError)
         }
 
-        val targetFolio = formState.folioInterno.trim()
         val isEdit = !formState.id.isNullOrBlank()
+        if (isEdit && sessionStorage != null) {
+            val activeSession = sessionStorage.getSession()
+            val canEdit = activeSession?.let { RanchAccessPolicy.resolveCapabilities(it).canEditGeneralRecords } ?: false
+            if (!canEdit) {
+                return@withContext AnimalSaveResult.ValidationError(
+                    "No tienes permiso para editar registros de ejemplares."
+                )
+            }
+        }
+
+        val targetFolio = formState.folioInterno.trim()
         val animalId = if (isEdit) formState.id!! else UuidV7.generate()
         val mutationId = UuidV7.generate()
         val occurredAt = formatEpochMillisToIsoUtc(clockMillis())
@@ -165,15 +178,28 @@ class SqlDelightAnimalCommandRepository(
         )
     }
 
-    override suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> = withContext(ioDispatcher) {
-        database.oviAppDatabaseQueries.selectAnimalsBySexPaged(ranchId, Sex.FEMALE.name, 200, 0)
-            .executeAsList().map { it.id to it.folio_interno }
-    }
+    override suspend fun getPotentialDams(ranchId: String): List<Pair<String, String>> =
+        getPotentialParentsBySex(ranchId, Sex.FEMALE)
 
-    override suspend fun getPotentialSires(ranchId: String): List<Pair<String, String>> = withContext(ioDispatcher) {
-        database.oviAppDatabaseQueries.selectAnimalsBySexPaged(ranchId, Sex.MALE.name, 200, 0)
-            .executeAsList().map { it.id to it.folio_interno }
-    }
+    override suspend fun getPotentialSires(ranchId: String): List<Pair<String, String>> =
+        getPotentialParentsBySex(ranchId, Sex.MALE)
+
+    private suspend fun getPotentialParentsBySex(ranchId: String, sex: Sex): List<Pair<String, String>> =
+        withContext(ioDispatcher) {
+            val pageSize = 200L
+            var offset = 0L
+            val allParents = mutableListOf<Pair<String, String>>()
+            while (true) {
+                val batch = database.oviAppDatabaseQueries
+                    .selectAnimalsBySexPaged(ranchId, sex.name, pageSize, offset)
+                    .executeAsList()
+                    .map { it.id to it.folio_interno }
+                allParents.addAll(batch)
+                if (batch.size.toLong() < pageSize) break
+                offset += pageSize
+            }
+            allParents
+        }
 }
 
 private fun formatEpochMillisToIsoUtc(epochMillis: Long): String {

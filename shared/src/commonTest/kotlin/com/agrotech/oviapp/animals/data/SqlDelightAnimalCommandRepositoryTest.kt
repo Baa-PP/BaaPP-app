@@ -3,6 +3,8 @@ package com.agrotech.oviapp.animals.data
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.agrotech.oviapp.animals.domain.model.AnimalFormState
 import com.agrotech.oviapp.animals.domain.model.AnimalSaveResult
+import com.agrotech.oviapp.auth.domain.AuthSession
+import com.agrotech.oviapp.auth.domain.SessionStorage
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.ConceptionMethod
 import com.agrotech.oviapp.domain.model.EntryReason
@@ -223,5 +225,140 @@ class SqlDelightAnimalCommandRepositoryTest {
         val events = database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList()
         assertEquals(1, events.size)
         assertEquals("2025-11-22T00:00:00Z", events[0].occurred_at)
+    }
+
+    @Test
+    fun testSelfParentingRejectedByValidation() = runTest {
+        val selfId = UuidV7.generate()
+        val selfDam = AnimalFormState(
+            id = selfId,
+            ranchId = "ranch-self",
+            folioInterno = "SELF-1",
+            color = "Blanco",
+            birthDate = "2024-01-01",
+            damId = selfId
+        )
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(selfDam))
+
+        val selfSire = selfDam.copy(damId = null, sireId = selfId)
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(selfSire))
+    }
+
+    @Test
+    fun testReadOnlySessionCannotEditAnimalOffline() = runTest {
+        val readOnlyStorage = object : SessionStorage {
+            private var session: AuthSession? = AuthSession(
+                accessToken = "tok",
+                username = "auditor",
+                role = "ASSOCIATION_SUPERUSER",
+                ranchId = "ranch-ro",
+                sessionId = "s-ro"
+            )
+            override fun saveSession(session: AuthSession) { this.session = session }
+            override fun getSession(): AuthSession? = session
+            override fun clearSession() { session = null }
+            override fun hasSession(): Boolean = session != null
+            override fun updateSessionIfMatches(
+                expectedSessionId: String,
+                expectedRefreshToken: String?,
+                expectedAccessToken: String?,
+                transform: (AuthSession) -> AuthSession
+            ): Boolean = false
+            override fun clearSessionIfMatches(
+                expectedSessionId: String,
+                expectedRefreshToken: String?,
+                expectedAccessToken: String?
+            ): Boolean = false
+        }
+        val gatedRepo = SqlDelightAnimalCommandRepository(
+            database = database,
+            sessionStorage = readOnlyStorage
+        )
+        val animalId = UuidV7.generate()
+        database.oviAppDatabaseQueries.insertAnimal(
+            id = animalId,
+            ranch_id = "ranch-ro",
+            folio_interno = "ORIG-1",
+            siniiga_chip = null,
+            registro_uno = null,
+            adn = null,
+            breed = "Dorper",
+            color = "Blanco",
+            sex = Sex.FEMALE.name,
+            birth_date = "2024-01-01",
+            weaning_date = null,
+            parturition_type = ParturitionType.SIMPLE.name,
+            conception_method = ConceptionMethod.MN.name,
+            sire_id = null,
+            dam_id = null,
+            external_sire_folio = null,
+            external_dam_folio = null,
+            entry_reason = EntryReason.BIRTH.name,
+            criador_name = null,
+            photo_s3_key = null,
+            birth_event_id = null,
+            mortality_date = null,
+            mortality_cause = null,
+            life_stage = LifeStage.ADULT.name,
+            reproductive_status = ReproductiveStatus.EMPTY.name,
+            status = "ACTIVE",
+            updated_at = "2025-01-01T00:00:00Z"
+        )
+
+        val editAttempt = AnimalFormState(
+            id = animalId,
+            ranchId = "ranch-ro",
+            folioInterno = "MODIFIED-1",
+            color = "Blanco",
+            birthDate = "2024-01-01"
+        )
+        val result = gatedRepo.saveAnimalOffline(editAttempt)
+        assertIs<AnimalSaveResult.ValidationError>(result)
+        assertEquals("ORIG-1", gatedRepo.getAnimalById(animalId)?.folioInterno)
+        assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
+    }
+
+    @Test
+    fun testPotentialParentsRetrievalReturnsAllBeyond200() = runTest {
+        val ranchId = "ranch-many"
+        var lastId = ""
+        for (i in 1..205) {
+            val id = UuidV7.generate()
+            lastId = id
+            val padded = i.toString().padStart(3, '0')
+            database.oviAppDatabaseQueries.insertAnimal(
+                id = id,
+                ranch_id = ranchId,
+                folio_interno = "DAM-$padded",
+                siniiga_chip = null,
+                registro_uno = null,
+                adn = null,
+                breed = "Pelifolk",
+                color = "Blanco",
+                sex = Sex.FEMALE.name,
+                birth_date = "2023-01-01",
+                weaning_date = null,
+                parturition_type = ParturitionType.SIMPLE.name,
+                conception_method = ConceptionMethod.MN.name,
+                sire_id = null,
+                dam_id = null,
+                external_sire_folio = null,
+                external_dam_folio = null,
+                entry_reason = EntryReason.BIRTH.name,
+                criador_name = null,
+                photo_s3_key = null,
+                birth_event_id = null,
+                mortality_date = null,
+                mortality_cause = null,
+                life_stage = LifeStage.ADULT.name,
+                reproductive_status = ReproductiveStatus.EMPTY.name,
+                status = "ACTIVE",
+                updated_at = "2025-01-01T00:00:00Z"
+            )
+        }
+
+        val dams = repository.getPotentialDams(ranchId)
+        assertEquals(205, dams.size)
+        assertTrue(dams.any { it.first == lastId && it.second == "DAM-205" })
     }
 }

@@ -527,15 +527,17 @@ fun AnimalFormScreen(
                                         damExpanded = false
                                     }
                                 )
-                                damsList.forEach { (id, folio) ->
-                                    DropdownMenuItem(
-                                        text = { Text(folio) },
-                                        onClick = {
-                                            damId = id
-                                            damExpanded = false
-                                        }
-                                    )
-                                }
+                                damsList
+                                    .filter { it.first != animalIdToEdit }
+                                    .forEach { (id, folio) ->
+                                        DropdownMenuItem(
+                                            text = { Text(folio) },
+                                            onClick = {
+                                                damId = id
+                                                damExpanded = false
+                                            }
+                                        )
+                                    }
                             }
                         }
 
@@ -576,15 +578,17 @@ fun AnimalFormScreen(
                                         sireExpanded = false
                                     }
                                 )
-                                siresList.forEach { (id, folio) ->
-                                    DropdownMenuItem(
-                                        text = { Text(folio) },
-                                        onClick = {
-                                            sireId = id
-                                            sireExpanded = false
-                                        }
-                                    )
-                                }
+                                siresList
+                                    .filter { it.first != animalIdToEdit }
+                                    .forEach { (id, folio) ->
+                                        DropdownMenuItem(
+                                            text = { Text(folio) },
+                                            onClick = {
+                                                sireId = id
+                                                sireExpanded = false
+                                            }
+                                        )
+                                    }
                             }
                         }
 
@@ -616,7 +620,7 @@ fun AnimalFormScreen(
                         ) {
                             OutlinedButton(
                                 onClick = { photoPickerLauncher.launch("image/*") },
-                                enabled = !isCompressingPhoto,
+                                enabled = !isCompressingPhoto && !isSaving,
                                 modifier = Modifier.heightIn(min = 56.dp),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
@@ -660,7 +664,7 @@ fun AnimalFormScreen(
                                     photoSizeBytes = null
                                     photoS3Key = null
                                 },
-                                enabled = !isCompressingPhoto
+                                enabled = !isCompressingPhoto && !isSaving
                             ) {
                                 Text("Quitar Foto", color = Color(0xFFB71C1C))
                             }

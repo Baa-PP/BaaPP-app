@@ -96,7 +96,10 @@ class MainActivity : ComponentActivity() {
                                 val driverFactory = DatabaseDriverFactory(applicationContext)
                                 val database = createDatabase(driverFactory)
                                 val inventoryRepo = SqlDelightAnimalInventoryRepository(database)
-                                val commandRepo = SqlDelightAnimalCommandRepository(database)
+                                val commandRepo = SqlDelightAnimalCommandRepository(
+                                    database = database,
+                                    sessionStorage = sessionStorage
+                                )
 
                                 val cachedSession = repository.getCachedSession()
                                 val published = publishOrClose(repository)
@@ -331,6 +334,7 @@ fun AppNavigation(
 
     if (session != null) {
         val currentRanchId = session?.ranchId
+        val capabilities = session!!.uiCapabilities()
         when (val screen = currentScreen) {
             is AppScreen.Inventory -> {
                 if (!currentRanchId.isNullOrBlank()) {
@@ -338,8 +342,12 @@ fun AppNavigation(
                         ranchId = currentRanchId,
                         inventoryRepository = inventoryRepository,
                         onBackClick = { currentScreen = AppScreen.Home },
-                        onEditAnimalClick = { animalId ->
-                            currentScreen = AppScreen.AnimalForm(animalId = animalId)
+                        onEditAnimalClick = if (capabilities.canEditGeneralRecords) {
+                            { animalId ->
+                                currentScreen = AppScreen.AnimalForm(animalId = animalId)
+                            }
+                        } else {
+                            null
                         }
                     )
                 } else {
@@ -347,7 +355,12 @@ fun AppNavigation(
                 }
             }
             is AppScreen.AnimalForm -> {
-                if (!currentRanchId.isNullOrBlank()) {
+                val canOpenForm = if (screen.animalId != null) {
+                    capabilities.canEditGeneralRecords
+                } else {
+                    capabilities.canCapture
+                }
+                if (!currentRanchId.isNullOrBlank() && canOpenForm) {
                     AnimalFormScreen(
                         ranchId = currentRanchId,
                         animalIdToEdit = screen.animalId,
@@ -361,7 +374,7 @@ fun AppNavigation(
                         }
                     )
                 } else {
-                    currentScreen = AppScreen.Home
+                    currentScreen = if (screen.animalId != null) AppScreen.Inventory else AppScreen.Home
                 }
             }
             is AppScreen.Home -> {

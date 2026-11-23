@@ -55,6 +55,14 @@ data class AnimalFormState(
         if (!cleanWeaningDate.isNullOrEmpty() && !isValidIsoDate(cleanWeaningDate)) {
             return "La fecha de destete debe tener formato válido YYYY-MM-DD."
         }
+        if (!id.isNullOrBlank()) {
+            if (damId == id) {
+                return "Un ejemplar no puede ser su propia madre."
+            }
+            if (sireId == id) {
+                return "Un ejemplar no puede ser su propio semental."
+            }
+        }
         if (!SiniigaValidator.isValid(siniigaChip)) {
             return "El chip SINIIGA debe tener entre 10 y 15 dígitos numéricos iniciando con 484."
         }

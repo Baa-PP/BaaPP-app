@@ -102,7 +102,7 @@ fun InventoryScreen(
     ranchId: String,
     inventoryRepository: AnimalInventoryRepository,
     onBackClick: () -> Unit,
-    onEditAnimalClick: (String) -> Unit = {},
+    onEditAnimalClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
@@ -119,7 +119,8 @@ fun InventoryScreen(
 
     var isLoading by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
-    var retryTrigger by remember { mutableIntStateOf(0) }
+    var initialRetryTrigger by remember { mutableIntStateOf(0) }
+    var paginationRetryTrigger by remember { mutableIntStateOf(0) }
     var canLoadMore by remember { mutableStateOf(true) }
     var currentOffset by remember { mutableStateOf(0L) }
     val pageSize = 50L
@@ -128,61 +129,59 @@ fun InventoryScreen(
     val focusManager = LocalFocusManager.current
     val listState = rememberLazyListState()
 
-    // Reload list when tab, search, or filters change
-    LaunchedEffect(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, retryTrigger) {
-        if (retryTrigger == 0 || currentOffset == 0L) {
-            isLoading = true
-            loadError = null
-            currentOffset = 0L
-            canLoadMore = true
-            try {
-                when (currentTab) {
-                    InventoryTab.EWES -> {
-                        val results = inventoryRepository.getEwesPaged(
-                            ranchId = ranchId,
-                            query = searchQuery,
-                            reproductiveStatus = selectedReproductiveStatus,
-                            limit = pageSize,
-                            offset = 0L
-                        )
-                        ewesList = results
-                        canLoadMore = results.size.toLong() == pageSize
-                    }
-                    InventoryTab.RAMS -> {
-                        val results = inventoryRepository.getRamsPaged(
-                            ranchId = ranchId,
-                            query = searchQuery,
-                            limit = pageSize,
-                            offset = 0L
-                        )
-                        ramsList = results
-                        canLoadMore = results.size.toLong() == pageSize
-                    }
-                    InventoryTab.LAMBS -> {
-                        val results = inventoryRepository.getLambsPaged(
-                            ranchId = ranchId,
-                            query = searchQuery,
-                            lifeStage = selectedLifeStage,
-                            limit = pageSize,
-                            offset = 0L
-                        )
-                        lambsList = results
-                        canLoadMore = results.size.toLong() == pageSize
-                    }
+    // Reload list when tab, search, or filters change (or initial load retry)
+    LaunchedEffect(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, initialRetryTrigger) {
+        isLoading = true
+        loadError = null
+        currentOffset = 0L
+        canLoadMore = true
+        try {
+            when (currentTab) {
+                InventoryTab.EWES -> {
+                    val results = inventoryRepository.getEwesPaged(
+                        ranchId = ranchId,
+                        query = searchQuery,
+                        reproductiveStatus = selectedReproductiveStatus,
+                        limit = pageSize,
+                        offset = 0L
+                    )
+                    ewesList = results
+                    canLoadMore = results.size.toLong() == pageSize
                 }
-                currentOffset = pageSize
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                loadError = e.message ?: "No se pudo cargar el inventario."
-            } finally {
-                isLoading = false
+                InventoryTab.RAMS -> {
+                    val results = inventoryRepository.getRamsPaged(
+                        ranchId = ranchId,
+                        query = searchQuery,
+                        limit = pageSize,
+                        offset = 0L
+                    )
+                    ramsList = results
+                    canLoadMore = results.size.toLong() == pageSize
+                }
+                InventoryTab.LAMBS -> {
+                    val results = inventoryRepository.getLambsPaged(
+                        ranchId = ranchId,
+                        query = searchQuery,
+                        lifeStage = selectedLifeStage,
+                        limit = pageSize,
+                        offset = 0L
+                    )
+                    lambsList = results
+                    canLoadMore = results.size.toLong() == pageSize
+                }
             }
+            currentOffset = pageSize
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            loadError = e.message ?: "No se pudo cargar el inventario."
+        } finally {
+            isLoading = false
         }
     }
 
     // Infinite scroll listener
-    LaunchedEffect(listState, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, retryTrigger) {
+    LaunchedEffect(listState, currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage, paginationRetryTrigger) {
         val requestTag = PaginationTag(currentTab, searchQuery, selectedReproductiveStatus, selectedLifeStage)
         snapshotFlow {
             val layoutInfo = listState.layoutInfo
@@ -407,7 +406,10 @@ fun InventoryScreen(
                                 item { EmptyInventoryView("No se encontraron hembras activas.") }
                             } else {
                                 items(ewesList, key = { it.id }) { ewe ->
-                                    EweCard(ewe, onEditClick = { onEditAnimalClick(ewe.id) })
+                                    EweCard(
+                                        ewe = ewe,
+                                        onEditClick = onEditAnimalClick?.let { handler -> { handler(ewe.id) } }
+                                    )
                                 }
                             }
                         }
@@ -416,7 +418,10 @@ fun InventoryScreen(
                                 item { EmptyInventoryView("No se encontraron sementales activos.") }
                             } else {
                                 items(ramsList, key = { it.id }) { ram ->
-                                    RamCard(ram, onEditClick = { onEditAnimalClick(ram.id) })
+                                    RamCard(
+                                        ram = ram,
+                                        onEditClick = onEditAnimalClick?.let { handler -> { handler(ram.id) } }
+                                    )
                                 }
                             }
                         }
@@ -425,7 +430,10 @@ fun InventoryScreen(
                                 item { EmptyInventoryView("No se encontraron crías activas.") }
                             } else {
                                 items(lambsList, key = { it.id }) { lamb ->
-                                    LambCard(lamb, onEditClick = { onEditAnimalClick(lamb.id) })
+                                    LambCard(
+                                        lamb = lamb,
+                                        onEditClick = onEditAnimalClick?.let { handler -> { handler(lamb.id) } }
+                                    )
                                 }
                             }
                         }
@@ -455,7 +463,11 @@ fun InventoryScreen(
                                     OutlinedButton(
                                         onClick = {
                                             loadError = null
-                                            retryTrigger++
+                                            if (currentOffset == 0L) {
+                                                initialRetryTrigger++
+                                            } else {
+                                                paginationRetryTrigger++
+                                            }
                                         },
                                         modifier = Modifier.heightIn(min = 48.dp)
                                     ) {
@@ -485,7 +497,7 @@ fun InventoryScreen(
 }
 
 @Composable
-private fun EweCard(ewe: EweInventoryItem, onEditClick: () -> Unit) {
+private fun EweCard(ewe: EweInventoryItem, onEditClick: (() -> Unit)?) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -546,15 +558,17 @@ private fun EweCard(ewe: EweInventoryItem, onEditClick: () -> Unit) {
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(
-                    onClick = onEditClick,
-                    modifier = Modifier.heightIn(min = 48.dp)
+            if (onEditClick != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = onEditClick,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
+                        Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -562,7 +576,7 @@ private fun EweCard(ewe: EweInventoryItem, onEditClick: () -> Unit) {
 }
 
 @Composable
-private fun RamCard(ram: RamInventoryItem, onEditClick: () -> Unit) {
+private fun RamCard(ram: RamInventoryItem, onEditClick: (() -> Unit)?) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -633,15 +647,17 @@ private fun RamCard(ram: RamInventoryItem, onEditClick: () -> Unit) {
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(
-                    onClick = onEditClick,
-                    modifier = Modifier.heightIn(min = 48.dp)
+            if (onEditClick != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = onEditClick,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
+                        Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -649,7 +665,7 @@ private fun RamCard(ram: RamInventoryItem, onEditClick: () -> Unit) {
 }
 
 @Composable
-private fun LambCard(lamb: LambInventoryItem, onEditClick: () -> Unit) {
+private fun LambCard(lamb: LambInventoryItem, onEditClick: (() -> Unit)?) {
     val isMale = lamb.sex == Sex.MALE
     val sexLabel = if (isMale) "♂ Macho" else "♀ Hembra"
     val sexColor = if (isMale) BaappMaleBlue else BaappFemalePink
@@ -715,15 +731,17 @@ private fun LambCard(lamb: LambInventoryItem, onEditClick: () -> Unit) {
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(
-                    onClick = onEditClick,
-                    modifier = Modifier.heightIn(min = 48.dp)
+            if (onEditClick != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = onEditClick,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
+                        Text("Editar Ficha", color = BaappPrimaryGreen, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
