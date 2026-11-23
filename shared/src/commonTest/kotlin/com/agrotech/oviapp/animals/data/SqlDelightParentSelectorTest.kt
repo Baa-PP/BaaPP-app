@@ -35,16 +35,22 @@ class SqlDelightParentSelectorTest {
         val ranchB = "ranch-b"
 
         insertAnimal(ranchA, "HEMBRA-A1", Sex.FEMALE, AnimalStatus.ACTIVE)
-        insertAnimal(ranchA, "HEMBRA-A2-FALLECIDA", Sex.FEMALE, AnimalStatus.DECEASED)
+        insertAnimal(ranchA, "HEMBRA-A2", Sex.FEMALE, AnimalStatus.ACTIVE)
+        insertAnimal(
+            ranchId = ranchA,
+            folio = "HEMBRA-OTRA",
+            sex = Sex.FEMALE,
+            status = AnimalStatus.ACTIVE,
+            siniigaChip = "484000999111"
+        )
+        insertAnimal(ranchA, "HEMBRA-A3-FALLECIDA", Sex.FEMALE, AnimalStatus.DECEASED)
         insertAnimal(ranchA, "SEMENTAL-A1", Sex.MALE, AnimalStatus.ACTIVE)
         insertAnimal(ranchB, "HEMBRA-B1", Sex.FEMALE, AnimalStatus.ACTIVE)
         insertAnimal(ranchB, "SEMENTAL-B1", Sex.MALE, AnimalStatus.ACTIVE)
 
         val damsA = repository.getPotentialDams(ranchA)
-        assertEquals(1, damsA.size)
-        assertEquals("HEMBRA-A1", damsA[0].folioInterno)
-        assertEquals(Sex.FEMALE, damsA[0].sex)
-        assertEquals(ranchA, damsA[0].ranchId)
+        assertEquals(3, damsA.size)
+        assertTrue(damsA.all { it.sex == Sex.FEMALE && it.ranchId == ranchA })
 
         val siresA = repository.getPotentialSires(ranchA)
         assertEquals(1, siresA.size)
@@ -52,21 +58,30 @@ class SqlDelightParentSelectorTest {
         assertEquals(Sex.MALE, siresA[0].sex)
         assertEquals(ranchA, siresA[0].ranchId)
 
-        val filtered = repository.getPotentialDams(ranchA, query = "A1")
-        assertTrue(filtered.any { it.folioInterno == "HEMBRA-A1" })
+        val filteredByFolio = repository.getPotentialDams(ranchA, query = "A1")
+        assertEquals(1, filteredByFolio.size)
+        assertEquals("HEMBRA-A1", filteredByFolio[0].folioInterno)
+
+        val filteredByChip = repository.getPotentialDams(ranchA, query = "484000999")
+        assertEquals(1, filteredByChip.size)
+        assertEquals("HEMBRA-OTRA", filteredByChip[0].folioInterno)
+
+        val noMatches = repository.getPotentialDams(ranchA, query = "NO-EXISTE")
+        assertTrue(noMatches.isEmpty())
     }
 
     private fun insertAnimal(
         ranchId: String,
         folio: String,
         sex: Sex,
-        status: AnimalStatus
+        status: AnimalStatus,
+        siniigaChip: String? = null
     ) {
         database.oviAppDatabaseQueries.insertAnimal(
             id = UuidV7.generate(),
             ranch_id = ranchId,
             folio_interno = folio,
-            siniiga_chip = null,
+            siniiga_chip = siniigaChip,
             registro_uno = null,
             adn = null,
             breed = "Pelifolk",
