@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,8 +68,13 @@ import com.agrotech.oviapp.media.ImageCompressor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+
+private const val MAX_SOURCE_PHOTO_BYTES = 15 * 1024 * 1024
+private const val PENDING_PHOTOS_DIR_NAME = "pending_animal_photos"
 
 private val BaappPrimaryGreen = Color(0xFF1B5E20)
 private val BaappBackground = Color(0xFFF7F9F7)
@@ -91,46 +97,51 @@ fun AnimalFormScreen(
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    var folioInterno by remember { mutableStateOf("") }
-    var siniigaChip by remember { mutableStateOf("") }
-    var registroUno by remember { mutableStateOf("") }
-    var adn by remember { mutableStateOf("") }
-    var breed by remember { mutableStateOf("Pelifolk") }
-    var color by remember { mutableStateOf("") }
-    var sex by remember { mutableStateOf(Sex.FEMALE) }
-    var birthDate by remember { mutableStateOf("2026-01-01") }
-    var weaningDate by remember { mutableStateOf("") }
-    var parturitionType by remember { mutableStateOf(ParturitionType.SIMPLE) }
-    var conceptionMethod by remember { mutableStateOf(ConceptionMethod.MN) }
-    var entryReason by remember { mutableStateOf(EntryReason.BIRTH) }
-    var criadorName by remember { mutableStateOf("") }
-    var sireId by remember { mutableStateOf<String?>(null) }
-    var damId by remember { mutableStateOf<String?>(null) }
-    var externalSireFolio by remember { mutableStateOf("") }
-    var externalDamFolio by remember { mutableStateOf("") }
-    var lifeStage by remember { mutableStateOf(LifeStage.ADULT) }
-    var reproductiveStatus by remember { mutableStateOf(ReproductiveStatus.EMPTY) }
+    var folioInterno by rememberSaveable { mutableStateOf("") }
+    var siniigaChip by rememberSaveable { mutableStateOf("") }
+    var registroUno by rememberSaveable { mutableStateOf("") }
+    var adn by rememberSaveable { mutableStateOf("") }
+    var breed by rememberSaveable { mutableStateOf("Pelifolk") }
+    var color by rememberSaveable { mutableStateOf("") }
+    var sex by rememberSaveable { mutableStateOf(Sex.FEMALE) }
+    var birthDate by rememberSaveable { mutableStateOf("2026-01-01") }
+    var weaningDate by rememberSaveable { mutableStateOf("") }
+    var parturitionType by rememberSaveable { mutableStateOf(ParturitionType.SIMPLE) }
+    var conceptionMethod by rememberSaveable { mutableStateOf(ConceptionMethod.MN) }
+    var entryReason by rememberSaveable { mutableStateOf(EntryReason.BIRTH) }
+    var criadorName by rememberSaveable { mutableStateOf("") }
+    var sireId by rememberSaveable { mutableStateOf<String?>(null) }
+    var damId by rememberSaveable { mutableStateOf<String?>(null) }
+    var externalSireFolio by rememberSaveable { mutableStateOf("") }
+    var externalDamFolio by rememberSaveable { mutableStateOf("") }
+    var lifeStage by rememberSaveable { mutableStateOf(LifeStage.ADULT) }
+    var reproductiveStatus by rememberSaveable { mutableStateOf(ReproductiveStatus.EMPTY) }
 
-    var localPhotoPath by remember { mutableStateOf<String?>(null) }
-    var photoSizeBytes by remember { mutableStateOf<Int?>(null) }
+    var localPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var photoSizeBytes by rememberSaveable { mutableStateOf<Int?>(null) }
+    var photoS3Key by rememberSaveable { mutableStateOf<String?>(null) }
+    var hasLoadedExisting by rememberSaveable(ranchId, animalIdToEdit) { mutableStateOf(false) }
     var isCompressingPhoto by remember { mutableStateOf(false) }
 
     var damsList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var siresList by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingExisting by remember { mutableStateOf(false) }
 
     var breedExpanded by remember { mutableStateOf(false) }
+    var lifeStageExpanded by remember { mutableStateOf(false) }
     var reasonExpanded by remember { mutableStateOf(false) }
+    var damExpanded by remember { mutableStateOf(false) }
+    var sireExpanded by remember { mutableStateOf(false) }
 
     // Load parental dropdowns and existing animal if editing
     LaunchedEffect(ranchId, animalIdToEdit) {
         damsList = commandRepository.getPotentialDams(ranchId)
         siresList = commandRepository.getPotentialSires(ranchId)
 
-        if (animalIdToEdit != null) {
+        if (animalIdToEdit != null && !hasLoadedExisting) {
             isLoadingExisting = true
             val existing = commandRepository.getAnimalById(animalIdToEdit)
             if (existing != null) {
@@ -153,29 +164,37 @@ fun AnimalFormScreen(
                 externalDamFolio = existing.externalDamFolio ?: ""
                 lifeStage = existing.lifeStage
                 reproductiveStatus = existing.reproductiveStatus
+                photoS3Key = existing.photoS3Key
+                hasLoadedExisting = true
             }
             isLoadingExisting = false
         }
     }
 
-    // Photo picker with automatic ~150-200 KB compression
+    // Photo picker with bounded read and automatic ~150-200 KB compression
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri != null) {
             scope.launch {
                 isCompressingPhoto = true
+                errorMessage = null
                 withContext(Dispatchers.IO) {
                     try {
-                        val inputBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        val inputBytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                            readBoundedPhotoBytes(stream, MAX_SOURCE_PHOTO_BYTES)
+                        }
                         if (inputBytes != null) {
                             val compressedBytes = ImageCompressor.compressToTarget(inputBytes, 200 * 1024)
-                            val cacheFile = File(context.cacheDir, "animal_${System.currentTimeMillis()}.jpg")
-                            FileOutputStream(cacheFile).use { fos ->
+                            val photosDir = File(context.filesDir, PENDING_PHOTOS_DIR_NAME).apply { mkdirs() }
+                            val photoFile = File(photosDir, "animal_${System.currentTimeMillis()}.jpg")
+                            FileOutputStream(photoFile).use { fos ->
                                 fos.write(compressedBytes)
                             }
-                            localPhotoPath = cacheFile.absolutePath
+                            deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                            localPhotoPath = photoFile.absolutePath
                             photoSizeBytes = compressedBytes.size
+                            photoS3Key = null
                         }
                     } catch (e: Exception) {
                         errorMessage = "Error procesando fotografía: ${e.message}"
@@ -365,6 +384,37 @@ fun AnimalFormScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp)
                         )
+
+                        // Etapa de Vida Dropdown
+                        ExposedDropdownMenuBox(
+                            expanded = lifeStageExpanded,
+                            onExpandedChange = { lifeStageExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = lifeStageLabel(lifeStage),
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Etapa de Vida") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = lifeStageExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            ExposedDropdownMenu(
+                                expanded = lifeStageExpanded,
+                                onDismissRequest = { lifeStageExpanded = false }
+                            ) {
+                                LifeStage.entries.forEach { stage ->
+                                    DropdownMenuItem(
+                                        text = { Text(lifeStageLabel(stage)) },
+                                        onClick = {
+                                            lifeStage = stage
+                                            lifeStageExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -450,21 +500,99 @@ fun AnimalFormScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("4. Genealogía", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
 
+                        val selectedDamFolio = damsList.firstOrNull { it.first == damId }?.second
+                            ?: if (damId != null) damId!! else "Ninguna / Externa"
+                        ExposedDropdownMenuBox(
+                            expanded = damExpanded,
+                            onExpandedChange = { damExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = selectedDamFolio,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Madre en Rebaño (Interna)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = damExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            ExposedDropdownMenu(
+                                expanded = damExpanded,
+                                onDismissRequest = { damExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Ninguna / Externa") },
+                                    onClick = {
+                                        damId = null
+                                        damExpanded = false
+                                    }
+                                )
+                                damsList.forEach { (id, folio) ->
+                                    DropdownMenuItem(
+                                        text = { Text(folio) },
+                                        onClick = {
+                                            damId = id
+                                            damExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
                         OutlinedTextField(
                             value = externalDamFolio,
                             onValueChange = { externalDamFolio = it },
-                            label = { Text("Madre (Folio o Folio Externo)") },
-                            placeholder = { Text("Ej. MADRE-01 o Externa") },
+                            label = { Text("Madre Externa (Folio Externo)") },
+                            placeholder = { Text("Ej. MADRE-EXT-01") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp)
                         )
 
+                        val selectedSireFolio = siresList.firstOrNull { it.first == sireId }?.second
+                            ?: if (sireId != null) sireId!! else "Ninguno / Externo"
+                        ExposedDropdownMenuBox(
+                            expanded = sireExpanded,
+                            onExpandedChange = { sireExpanded = it },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = selectedSireFolio,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Semental en Rebaño (Interno)") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sireExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            ExposedDropdownMenu(
+                                expanded = sireExpanded,
+                                onDismissRequest = { sireExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Ninguno / Externo") },
+                                    onClick = {
+                                        sireId = null
+                                        sireExpanded = false
+                                    }
+                                )
+                                siresList.forEach { (id, folio) ->
+                                    DropdownMenuItem(
+                                        text = { Text(folio) },
+                                        onClick = {
+                                            sireId = id
+                                            sireExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
                         OutlinedTextField(
                             value = externalSireFolio,
                             onValueChange = { externalSireFolio = it },
-                            label = { Text("Semental / Padre (Folio o Folio Externo)") },
-                            placeholder = { Text("Ej. SEMENTAL-01 o Externo") },
+                            label = { Text("Semental Externo (Folio Externo)") },
+                            placeholder = { Text("Ej. SEMENTAL-EXT-01") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp)
@@ -492,7 +620,7 @@ fun AnimalFormScreen(
                                 modifier = Modifier.heightIn(min = 56.dp),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
-                                Text(if (localPhotoPath == null) "Adjuntar Foto" else "Cambiar Foto")
+                                Text(if (localPhotoPath == null && photoS3Key.isNullOrBlank()) "Adjuntar Foto" else "Cambiar Foto")
                             }
 
                             if (isCompressingPhoto) {
@@ -506,6 +634,14 @@ fun AnimalFormScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                 )
+                            } else if (!photoS3Key.isNullOrBlank()) {
+                                Text(
+                                    text = "Foto guardada en ficha",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = BaappPrimaryGreen,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
                             }
                         }
 
@@ -514,6 +650,20 @@ fun AnimalFormScreen(
                                 text = "Archivo local: ${localPhotoPath!!.substringAfterLast('/')}",
                                 style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray)
                             )
+                        }
+
+                        if (localPhotoPath != null || !photoS3Key.isNullOrBlank()) {
+                            TextButton(
+                                onClick = {
+                                    deletePendingPhotoIfOwned(context.filesDir, localPhotoPath)
+                                    localPhotoPath = null
+                                    photoSizeBytes = null
+                                    photoS3Key = null
+                                },
+                                enabled = !isCompressingPhoto
+                            ) {
+                                Text("Quitar Foto", color = Color(0xFFB71C1C))
+                            }
                         }
                     }
                 }
@@ -545,6 +695,7 @@ fun AnimalFormScreen(
                                 entryReason = entryReason,
                                 criadorName = criadorName.takeIf { it.isNotBlank() },
                                 localPhotoPath = localPhotoPath,
+                                photoS3Key = photoS3Key,
                                 lifeStage = lifeStage,
                                 reproductiveStatus = reproductiveStatus
                             )
@@ -585,5 +736,37 @@ fun AnimalFormScreen(
                 }
             }
         }
+    }
+}
+
+private fun lifeStageLabel(stage: LifeStage): String = when (stage) {
+    LifeStage.ADULT -> "Adulto"
+    LifeStage.LAMB_LACTATING -> "Cría Lactante"
+    LifeStage.LAMB_FATTENING -> "Cría en Engorda"
+    LifeStage.EWE_REPLACEMENT -> "Recría / Reemplazo"
+}
+
+private fun readBoundedPhotoBytes(inputStream: InputStream, maxBytes: Int): ByteArray {
+    val buffer = ByteArray(8 * 1024)
+    val output = ByteArrayOutputStream()
+    var totalRead = 0
+    while (true) {
+        val read = inputStream.read(buffer)
+        if (read == -1) break
+        totalRead += read
+        if (totalRead > maxBytes) {
+            throw IllegalStateException("La fotografía supera el tamaño máximo permitido (15 MB).")
+        }
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
+private fun deletePendingPhotoIfOwned(filesDir: File, path: String?) {
+    if (path.isNullOrBlank()) return
+    val ownedDir = File(filesDir, PENDING_PHOTOS_DIR_NAME).canonicalFile
+    val target = File(path).canonicalFile
+    if (target.parentFile == ownedDir && target.exists()) {
+        target.delete()
     }
 }

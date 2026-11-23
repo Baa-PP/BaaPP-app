@@ -256,6 +256,32 @@ SET ranch_id = ?,
     updated_at = ?
 WHERE id = ?;
 
+updateAnimalFormFields:
+UPDATE local_animals
+SET ranch_id = ?,
+    folio_interno = ?,
+    siniiga_chip = ?,
+    registro_uno = ?,
+    adn = ?,
+    breed = ?,
+    color = ?,
+    sex = ?,
+    birth_date = ?,
+    weaning_date = ?,
+    parturition_type = ?,
+    conception_method = ?,
+    sire_id = ?,
+    dam_id = ?,
+    external_sire_folio = ?,
+    external_dam_folio = ?,
+    entry_reason = ?,
+    criador_name = ?,
+    photo_s3_key = ?,
+    life_stage = ?,
+    reproductive_status = ?,
+    updated_at = ?
+WHERE id = ?;
+
 updateAnimalStatus:
 UPDATE local_animals
 SET status = :status, mortality_date = :mortalityDate, mortality_cause = :mortalityCause, updated_at = CURRENT_TIMESTAMP

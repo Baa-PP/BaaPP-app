@@ -70,9 +70,21 @@ class TokenRefreshInterceptor(
             val isAuthEndpoint = request.url.encodedPath.contains("/auth/")
 
             // 1. Add credentials only if request matches baseUrl's origin and is not an auth endpoint.
-            // Strip credentials on foreign-origin hops while preserving immutable initiating provenance.
-            val capturedSession = if (matchesOrigin && !isAuthEndpoint) sessionStorage.getSession() else null
+            // Retain the initiating account generation independently of INJECTED_CREDENTIALS_KEY across every redirect hop.
+            val currentSessionForHop = sessionStorage.getSession()
+            val existingInitiatingSessionId = request.attributes.getOrNull(INITIATING_SESSION_ID_KEY)
+            if (existingInitiatingSessionId != null && currentSessionForHop?.sessionId != existingInitiatingSessionId) {
+                request.headers.remove(HttpHeaders.Authorization)
+                request.headers.remove(HEADER_ACTIVE_RANCH_ID)
+                request.attributes.remove(INJECTED_CREDENTIALS_KEY)
+                throw IllegalStateException("Session generation changed during redirect")
+            }
+
+            val capturedSession = if (matchesOrigin && !isAuthEndpoint) currentSessionForHop else null
             val existingProvenance = request.attributes.getOrNull(INJECTED_CREDENTIALS_KEY)
+            if (existingInitiatingSessionId == null && capturedSession != null) {
+                request.attributes.put(INITIATING_SESSION_ID_KEY, capturedSession.sessionId)
+            }
 
             if (!matchesOrigin) {
                 request.headers.remove(HEADER_ACTIVE_RANCH_ID)
@@ -141,9 +153,8 @@ class TokenRefreshInterceptor(
                         currentSession.accessToken != tokenUsed && currentSession.accessToken.isNotBlank() -> {
                             true
                         }
-                        // Stored refresh token is missing or blank
+                        // Stored refresh token is missing or blank: return original 401 without clearing session (preserve offline access)
                         currentSession.refreshToken.isNullOrBlank() -> {
-                            sessionStorage.clearSessionIfMatches(originSessionId, currentSession.refreshToken, originAccessToken)
                             false
                         }
                         // Need to call POST /api/v1/auth/refresh
@@ -258,6 +269,8 @@ class TokenRefreshInterceptor(
 
     companion object {
         const val HEADER_ACTIVE_RANCH_ID = "X-Active-Ranch-Id"
+        private val INITIATING_SESSION_ID_KEY =
+            AttributeKey<String>("TokenRefreshInitiatingSessionId")
         private val INJECTED_CREDENTIALS_KEY =
             AttributeKey<InjectedCredentials>("TokenRefreshInjectedCredentials")
 

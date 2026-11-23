@@ -28,6 +28,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -295,6 +297,23 @@ private sealed interface AppScreen {
     data class AnimalForm(val animalId: String? = null) : AppScreen
 }
 
+private val AppScreenSaver = listSaver<AppScreen, String>(
+    save = { screen ->
+        when (screen) {
+            is AppScreen.Home -> listOf("Home")
+            is AppScreen.Inventory -> listOf("Inventory")
+            is AppScreen.AnimalForm -> listOf("AnimalForm", screen.animalId ?: "")
+        }
+    },
+    restore = { saved ->
+        when (saved.firstOrNull()) {
+            "Inventory" -> AppScreen.Inventory
+            "AnimalForm" -> AppScreen.AnimalForm(saved.getOrNull(1)?.takeIf { it.isNotEmpty() })
+            else -> AppScreen.Home
+        }
+    }
+)
+
 @Composable
 fun AppNavigation(
     authRepository: AuthRepository,
@@ -303,7 +322,9 @@ fun AppNavigation(
     initialSession: AuthSession?
 ) {
     var session by remember { mutableStateOf<AuthSession?>(initialSession) }
-    var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
+    var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
+        mutableStateOf<AppScreen>(AppScreen.Home)
+    }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -316,7 +337,10 @@ fun AppNavigation(
                     InventoryScreen(
                         ranchId = currentRanchId,
                         inventoryRepository = inventoryRepository,
-                        onBackClick = { currentScreen = AppScreen.Home }
+                        onBackClick = { currentScreen = AppScreen.Home },
+                        onEditAnimalClick = { animalId ->
+                            currentScreen = AppScreen.AnimalForm(animalId = animalId)
+                        }
                     )
                 } else {
                     currentScreen = AppScreen.Home
@@ -328,7 +352,13 @@ fun AppNavigation(
                         ranchId = currentRanchId,
                         animalIdToEdit = screen.animalId,
                         commandRepository = commandRepository,
-                        onNavigateBack = { currentScreen = AppScreen.Home }
+                        onNavigateBack = {
+                            currentScreen = if (screen.animalId != null) {
+                                AppScreen.Inventory
+                            } else {
+                                AppScreen.Home
+                            }
+                        }
                     )
                 } else {
                     currentScreen = AppScreen.Home

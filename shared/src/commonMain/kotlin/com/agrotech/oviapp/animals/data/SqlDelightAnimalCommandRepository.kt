@@ -12,6 +12,8 @@ import com.agrotech.oviapp.domain.model.ParturitionType
 import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.domain.model.Sex
 import com.agrotech.oviapp.domain.model.UuidV7
+import com.agrotech.oviapp.domain.model.currentEpochMillis
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,7 +22,8 @@ import kotlinx.serialization.json.Json
 
 class SqlDelightAnimalCommandRepository(
     private val database: OviAppDatabase,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val clockMillis: () -> Long = ::currentEpochMillis
 ) : AnimalCommandRepository {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -32,28 +35,27 @@ class SqlDelightAnimalCommandRepository(
         }
 
         val targetFolio = formState.folioInterno.trim()
-        val existingByFolio = database.oviAppDatabaseQueries
-            .selectAnimalByFolio(formState.ranchId, targetFolio)
-            .executeAsOneOrNull()
-
         val isEdit = !formState.id.isNullOrBlank()
         val animalId = if (isEdit) formState.id!! else UuidV7.generate()
-
-        // Check duplicate folio locally
-        if (existingByFolio != null && existingByFolio.id != animalId) {
-            return@withContext AnimalSaveResult.DuplicateFolio(
-                "Ya existe un ejemplar con el arete '$targetFolio' en este rancho."
-            )
-        }
-
         val mutationId = UuidV7.generate()
-        val occurredAt = "2026-11-22T00:00:00"
+        val occurredAt = formatEpochMillisToIsoUtc(clockMillis())
         val operation = if (isEdit) "UPDATE" else "CREATE"
 
         try {
+            val existingByFolio = database.oviAppDatabaseQueries
+                .selectAnimalByFolio(formState.ranchId, targetFolio)
+                .executeAsOneOrNull()
+
+            // Check duplicate folio locally
+            if (existingByFolio != null && existingByFolio.id != animalId) {
+                return@withContext AnimalSaveResult.DuplicateFolio(
+                    "Ya existe un ejemplar con el arete '$targetFolio' en este rancho."
+                )
+            }
+
             database.transaction {
                 if (isEdit) {
-                    database.oviAppDatabaseQueries.updateAnimal(
+                    database.oviAppDatabaseQueries.updateAnimalFormFields(
                         ranch_id = formState.ranchId,
                         folio_interno = targetFolio,
                         siniiga_chip = formState.siniigaChip?.trim()?.takeIf { it.isNotEmpty() },
@@ -73,12 +75,8 @@ class SqlDelightAnimalCommandRepository(
                         entry_reason = formState.entryReason.name,
                         criador_name = formState.criadorName?.trim()?.takeIf { it.isNotEmpty() },
                         photo_s3_key = formState.photoS3Key,
-                        birth_event_id = null,
-                        mortality_date = null,
-                        mortality_cause = null,
                         life_stage = formState.lifeStage.name,
                         reproductive_status = formState.reproductiveStatus.name,
-                        status = AnimalStatus.ACTIVE.name,
                         updated_at = occurredAt,
                         id = animalId
                     )
@@ -127,6 +125,8 @@ class SqlDelightAnimalCommandRepository(
                 )
             }
             AnimalSaveResult.Success(animalId, mutationId)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             AnimalSaveResult.Error(e.message ?: "Error guardando el ejemplar localmente.")
         }
@@ -174,4 +174,33 @@ class SqlDelightAnimalCommandRepository(
         database.oviAppDatabaseQueries.selectAnimalsBySexPaged(ranchId, Sex.MALE.name, 200, 0)
             .executeAsList().map { it.id to it.folio_interno }
     }
+}
+
+private fun formatEpochMillisToIsoUtc(epochMillis: Long): String {
+    val totalSeconds = epochMillis.floorDiv(1000L)
+    val second = totalSeconds.mod(60)
+    val totalMinutes = totalSeconds.floorDiv(60L)
+    val minute = totalMinutes.mod(60)
+    val totalHours = totalMinutes.floorDiv(60L)
+    val hour = totalHours.mod(24)
+    val daysSinceEpoch = totalHours.floorDiv(24L)
+
+    // Howard Hinnant's civil-from-days algorithm (UTC)
+    val z = daysSinceEpoch + 719468L
+    val era = (if (z >= 0) z else z - 146096L) / 146097L
+    val doe = z - era * 146097L
+    val yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
+    val y = yoe + era * 400L
+    val doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
+    val mp = (5L * doy + 2L) / 153L
+    val day = (doy - (153L * mp + 2L) / 5L + 1L).toInt()
+    val month = (mp + (if (mp < 10L) 3L else -9L)).toInt()
+    val year = (y + (if (month <= 2) 1L else 0L)).toInt()
+
+    return "${year.toString().padStart(4, '0')}-" +
+        "${month.toString().padStart(2, '0')}-" +
+        "${day.toString().padStart(2, '0')}T" +
+        "${hour.toString().padStart(2, '0')}:" +
+        "${minute.toString().padStart(2, '0')}:" +
+        "${second.toString().padStart(2, '0')}Z"
 }

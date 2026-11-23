@@ -136,4 +136,92 @@ class SqlDelightAnimalCommandRepositoryTest {
         assertIs<AnimalSaveResult.ValidationError>(result)
         assertTrue(result.message.contains("SINIIGA"))
     }
+
+    @Test
+    fun testInvalidCalendarDatesRejectedBeforeDatabaseWrite() = runTest {
+        val invalidBirth = AnimalFormState(
+            ranchId = "ranch-val",
+            folioInterno = "FOLIO-DATE-1",
+            color = "Blanco",
+            birthDate = "2025-02-30"
+        )
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(invalidBirth))
+
+        val nonDateBirth = invalidBirth.copy(birthDate = "abc")
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(nonDateBirth))
+
+        val invalidWeaning = invalidBirth.copy(birthDate = "2024-02-29", weaningDate = "2024-04-31")
+        assertIs<AnimalSaveResult.ValidationError>(repository.saveAnimalOffline(invalidWeaning))
+
+        assertTrue(database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList().isEmpty())
+
+        val validLeapDay = invalidBirth.copy(birthDate = "2024-02-29", weaningDate = null)
+        assertIs<AnimalSaveResult.Success>(repository.saveAnimalOffline(validLeapDay))
+    }
+
+    @Test
+    fun testInjectedClockUsedForUpdatedAtAndOccurredAtAndEditPreservesLifecycleFields() = runTest {
+        // 1763769600000L = 2025-11-22T00:00:00Z
+        val fixedRepo = SqlDelightAnimalCommandRepository(
+            database = database,
+            clockMillis = { 1763769600000L }
+        )
+        val animalId = UuidV7.generate()
+        database.oviAppDatabaseQueries.insertAnimal(
+            id = animalId,
+            ranch_id = "ranch-life",
+            folio_interno = "FOLIO-LIFE-1",
+            siniiga_chip = null,
+            registro_uno = null,
+            adn = null,
+            breed = "Dorper",
+            color = "Blanco",
+            sex = Sex.FEMALE.name,
+            birth_date = "2024-01-10",
+            weaning_date = null,
+            parturition_type = ParturitionType.SIMPLE.name,
+            conception_method = ConceptionMethod.MN.name,
+            sire_id = null,
+            dam_id = null,
+            external_sire_folio = null,
+            external_dam_folio = null,
+            entry_reason = EntryReason.BIRTH.name,
+            criador_name = null,
+            photo_s3_key = "photos/existing.jpg",
+            birth_event_id = "birth-ev-123",
+            mortality_date = "2025-10-01",
+            mortality_cause = "NATURAL",
+            life_stage = LifeStage.ADULT.name,
+            reproductive_status = ReproductiveStatus.EMPTY.name,
+            status = "DECEASED",
+            updated_at = "2025-10-01T00:00:00Z"
+        )
+
+        val editForm = AnimalFormState(
+            id = animalId,
+            ranchId = "ranch-life",
+            folioInterno = "FOLIO-LIFE-2",
+            breed = "Dorper",
+            color = "Blanco",
+            sex = Sex.FEMALE,
+            birthDate = "2024-01-10",
+            photoS3Key = "photos/existing.jpg"
+        )
+        val res = fixedRepo.saveAnimalOffline(editForm)
+        assertIs<AnimalSaveResult.Success>(res)
+
+        val reloaded = fixedRepo.getAnimalById(animalId)
+        assertNotNull(reloaded)
+        assertEquals("FOLIO-LIFE-2", reloaded.folioInterno)
+        assertEquals("birth-ev-123", reloaded.birthEventId)
+        assertEquals("2025-10-01", reloaded.mortalityDateIso)
+        assertEquals("NATURAL", reloaded.mortalityCause)
+        assertEquals("DECEASED", reloaded.status.name)
+        assertEquals("photos/existing.jpg", reloaded.photoS3Key)
+        assertEquals("2025-11-22T00:00:00Z", reloaded.updatedAtIso)
+
+        val events = database.oviAppDatabaseQueries.selectPendingSyncEvents().executeAsList()
+        assertEquals(1, events.size)
+        assertEquals("2025-11-22T00:00:00Z", events[0].occurred_at)
+    }
 }

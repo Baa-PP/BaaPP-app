@@ -23,21 +23,20 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
     )
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val lock = Any()
 
-    override fun saveSession(session: AuthSession) = synchronized(lock) {
+    override fun saveSession(session: AuthSession) = synchronized(sharedLock) {
         writeSessionLocked(session)
     }
 
-    override fun getSession(): AuthSession? = synchronized(lock) {
+    override fun getSession(): AuthSession? = synchronized(sharedLock) {
         readSessionLocked()
     }
 
-    override fun clearSession() = synchronized(lock) {
+    override fun clearSession() = synchronized(sharedLock) {
         prefs.edit().clear().apply()
     }
 
-    override fun hasSession(): Boolean = synchronized(lock) {
+    override fun hasSession(): Boolean = synchronized(sharedLock) {
         !prefs.getString(KEY_ACCESS_TOKEN, null).isNullOrBlank()
     }
 
@@ -46,7 +45,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
         expectedRefreshToken: String?,
         expectedAccessToken: String?,
         transform: (AuthSession) -> AuthSession
-    ): Boolean = synchronized(lock) {
+    ): Boolean = synchronized(sharedLock) {
         val current = readSessionLocked() ?: return false
         if (current.sessionId != expectedSessionId ||
             current.refreshToken != expectedRefreshToken ||
@@ -62,7 +61,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
         expectedSessionId: String,
         expectedRefreshToken: String?,
         expectedAccessToken: String?
-    ): Boolean = synchronized(lock) {
+    ): Boolean = synchronized(sharedLock) {
         val current = readSessionLocked() ?: return false
         if (current.sessionId != expectedSessionId ||
             current.refreshToken != expectedRefreshToken ||
@@ -118,6 +117,7 @@ class AndroidEncryptedSessionStorage(context: Context) : SessionStorage {
     }
 
     companion object {
+        private val sharedLock = Any()
         private const val PREFS_NAME = "baapp_secure_session_prefs"
         private const val KEY_ACCESS_TOKEN = "sec_jwt_token"
         private const val KEY_REFRESH_TOKEN = "sec_refresh_token"
