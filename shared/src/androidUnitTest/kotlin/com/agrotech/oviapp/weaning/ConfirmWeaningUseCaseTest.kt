@@ -16,6 +16,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -177,6 +178,22 @@ class ConfirmWeaningUseCaseTest {
         val result = useCase.confirm("lamb", input())
 
         assertEquals(listOf(WeaningError.ANIMAL_ALREADY_WEANED), assertIs<ConfirmWeaningResult.Rejected>(result).weaningErrors)
+        assertNothingChanged("lamb")
+    }
+
+    @Test
+    fun ifQueueingFailsAfterTheLocalWritesEverythingIsRolledBack() {
+        // La cola rechaza el evento justo después de guardar pesaje, cría y madre en la misma transacción.
+        driver.execute(
+            null,
+            "CREATE TRIGGER queue_full BEFORE INSERT ON pending_sync_events BEGIN SELECT RAISE(ABORT, 'cola llena'); END",
+            0,
+        )
+
+        assertFailsWith<Exception> { useCase.confirm("lamb", input(weight = "19.50")) }
+
+        assertEquals("ACTIVE", animal("lamb").status)
+        assertEquals("LAMB_LACTATING", animal("lamb").life_stage)
         assertNothingChanged("lamb")
     }
 
