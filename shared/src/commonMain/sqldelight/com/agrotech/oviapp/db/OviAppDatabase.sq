@@ -97,10 +97,11 @@ CREATE INDEX idx_pending_sync_events_sequence ON pending_sync_events (sequence);
 insertPendingSyncEvent:
 INSERT INTO pending_sync_events (
     mutation_id, entity_type, operation, occurred_at,
-    payload_json, local_photo_path, sync_status
+    payload_json, local_photo_path, sync_status, sequence
 ) VALUES (
     ?, ?, ?, ?,
-    ?, ?, ?
+    ?, ?, ?,
+    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events)
 );
 
 -- Queries: sync
