@@ -152,6 +152,11 @@ selectAnimalById:
 SELECT * FROM local_animals
 WHERE id = :id;
 
+selectAnimalForWeighing:
+SELECT id, ranch_id, sex, birth_date, status, mortality_date
+FROM local_animals
+WHERE id = :id;
+
 selectAnimalByFolio:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND folio_interno = :folioInterno;
@@ -254,6 +259,13 @@ SELECT * FROM local_weight_measurements
 WHERE animal_id = :animalId
 ORDER BY measurement_date DESC
 LIMIT 1;
+
+-- APP-15: historial completo para la GDP local, en el mismo orden que el backend (fecha, id).
+selectWeightsByAnimalChronological:
+SELECT id, milestone, measurement_date, weight_kg, scrotal_circumference_cm
+FROM local_weight_measurements
+WHERE animal_id = :animalId
+ORDER BY measurement_date, id;
 
 insertWeightMeasurement:
 INSERT OR REPLACE INTO local_weight_measurements (
