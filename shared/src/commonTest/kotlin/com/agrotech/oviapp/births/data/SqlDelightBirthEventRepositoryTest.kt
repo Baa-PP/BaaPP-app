@@ -186,6 +186,41 @@ class SqlDelightBirthEventRepositoryTest {
         assertIs<BirthSaveResult.ValidationError>(missingFileRes)
     }
 
+    @Test
+    fun testGetSavedBirthEventsReturnsReadOnlySummariesWithParentFolios() = runTest {
+        val damId = insertAdult("ranch-1", "H-200", Sex.FEMALE)
+        val sireId = insertAdult("ranch-1", "M-200", Sex.MALE)
+
+        val saveRes = repository.saveBirthEventOffline(
+            BirthEventDraft(
+                ranchId = "ranch-1",
+                damId = damId,
+                sireId = sireId,
+                conceptionMethod = ConceptionMethod.MN,
+                birthDateIso = "2026-11-20",
+                stillborns = 1,
+                liveOffspring = listOf(
+                    LiveOffspringDraft("CRIA-200", Sex.FEMALE, "Canelo", "3.4")
+                ),
+                localPhotoPath = "/tmp/birth_200.jpg",
+                notes = "Parto normal"
+            ),
+            todayDateIso = "2026-11-22"
+        )
+        assertIs<BirthSaveResult.Success>(saveRes)
+
+        val saved = repository.getSavedBirthEvents("ranch-1")
+        assertEquals(1, saved.size)
+        val item = saved.first()
+        assertEquals("H-200", item.damFolio)
+        assertEquals("M-200", item.sireFolio)
+        assertEquals(1, item.liveBirths)
+        assertEquals(1, item.stillborns)
+        assertEquals("TWIN", item.parturitionType)
+        assertTrue(item.hasPhoto)
+        assertEquals("Parto normal", item.notes)
+    }
+
     private fun insertAdult(ranchId: String, folio: String, sex: Sex): String {
         val id = UuidV7.generate()
         database.oviAppDatabaseQueries.insertAnimal(

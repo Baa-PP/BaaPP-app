@@ -3,6 +3,7 @@ package com.agrotech.oviapp.auth
 import com.agrotech.oviapp.auth.domain.AuthSession
 import com.agrotech.oviapp.auth.domain.RanchPermission
 import com.agrotech.oviapp.auth.domain.UserRole
+import com.agrotech.oviapp.births.domain.model.BirthImmutabilityPolicy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -158,5 +159,13 @@ class RanchAccessPolicyTest {
         )
         assertFalse(session.hasPermission(RanchPermission.LECTURA))
         assertTrue(session.hasPermission(RanchPermission.CAPTURA))
+    }
+
+    @Test
+    fun testBirthImmutabilityNoticeIndicatesAuditedPhotoCorrection() {
+        val notice = BirthImmutabilityPolicy.AUDITED_CORRECTION_NOTICE
+        assertTrue(notice.contains("inmutables", ignoreCase = true))
+        assertTrue(notice.contains("foto", ignoreCase = true))
+        assertTrue(notice.contains("Asociación/Técnico", ignoreCase = true))
     }
 }

@@ -2,6 +2,7 @@ package com.agrotech.oviapp.births.data
 
 import com.agrotech.oviapp.births.domain.model.BirthEventDraft
 import com.agrotech.oviapp.births.domain.model.BirthSaveResult
+import com.agrotech.oviapp.births.domain.model.SavedBirthEvent
 import com.agrotech.oviapp.births.domain.repository.BirthEventRepository
 import com.agrotech.oviapp.births.media.isReadableLocalPhotoFile
 import com.agrotech.oviapp.db.OviAppDatabase
@@ -220,6 +221,53 @@ class SqlDelightBirthEventRepository(
 
     override suspend fun getPotentialSires(ranchId: String): List<Pair<String, String>> =
         loadParentsBySex(ranchId, Sex.MALE)
+
+    override suspend fun getSavedBirthEvents(ranchId: String): List<SavedBirthEvent> =
+        withContext(ioDispatcher) {
+            database.transactionWithResult {
+                val queries = database.oviAppDatabaseQueries
+                val folioCache = mutableMapOf<String, String?>()
+                fun resolveFolio(animalId: String?): String? {
+                    if (animalId == null) return null
+                    return folioCache.getOrPut(animalId) {
+                        queries.selectAnimalById(animalId).executeAsOneOrNull()?.folio_interno
+                    }
+                }
+
+                val pageSize = 200L
+                var offset = 0L
+                val result = mutableListOf<SavedBirthEvent>()
+                while (true) {
+                    val batch = queries
+                        .selectBirthEventsByRanchPaged(ranchId, pageSize, offset)
+                        .executeAsList()
+                    batch.forEach { row ->
+                        result.add(
+                            SavedBirthEvent(
+                                id = row.id,
+                                ranchId = row.ranch_id,
+                                damId = row.dam_id,
+                                damFolio = resolveFolio(row.dam_id),
+                                sireId = row.sire_id,
+                                sireFolio = resolveFolio(row.sire_id),
+                                birthDateIso = row.birth_date,
+                                liveBirths = row.live_births.toInt(),
+                                stillborns = row.stillborns.toInt(),
+                                parturitionType = row.parturition_type,
+                                conceptionMethod = row.conception_method,
+                                hasPhoto = !row.local_photo_path.isNullOrBlank() || !row.photo_s3_key.isNullOrBlank(),
+                                registeredByUserId = row.registered_by_user_id,
+                                notes = row.notes,
+                                createdAt = row.created_at
+                            )
+                        )
+                    }
+                    if (batch.size.toLong() < pageSize) break
+                    offset += pageSize
+                }
+                result
+            }
+        }
 
     private suspend fun loadParentsBySex(ranchId: String, sex: Sex): List<Pair<String, String>> =
         withContext(ioDispatcher) {

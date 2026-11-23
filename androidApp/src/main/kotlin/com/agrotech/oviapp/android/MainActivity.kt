@@ -43,6 +43,7 @@ import app.cash.sqldelight.db.SqlDriver
 import com.agrotech.oviapp.android.ui.BirthEventScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
+import com.agrotech.oviapp.android.ui.SavedBirthEventsScreen
 import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.auth.data.AndroidEncryptedSessionStorage
 import com.agrotech.oviapp.auth.data.KtorAuthService
@@ -385,6 +386,7 @@ fun AppNavigation(
     onResetBirthSaveState: () -> Unit = {}
 ) {
     var showingBirthScreen by rememberSaveable { mutableStateOf(false) }
+    var showingSavedBirthsScreen by rememberSaveable { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -402,19 +404,33 @@ fun AppNavigation(
                 onResetSaveState = onResetBirthSaveState,
                 onNavigateBack = { showingBirthScreen = false }
             )
+        } else if (showingSavedBirthsScreen && !currentRanchId.isNullOrBlank() && capabilities.canReadInventory) {
+            SavedBirthEventsScreen(
+                ranchId = currentRanchId,
+                capabilities = capabilities,
+                birthEventRepository = birthEventRepository,
+                onNavigateBack = { showingSavedBirthsScreen = false }
+            )
         } else {
             showingBirthScreen = false
+            showingSavedBirthsScreen = false
             HomeScreen(
                 session = session,
                 onLogoutClick = {
                     authRepository.logout()
                     onSessionChange(null)
                     showingBirthScreen = false
+                    showingSavedBirthsScreen = false
                     errorMessage = null
                 },
                 onOpenBirthEventClick = {
                     if (!session.ranchId.isNullOrBlank() && capabilities.canCapture) {
                         showingBirthScreen = true
+                    }
+                },
+                onOpenSavedBirthsClick = {
+                    if (!session.ranchId.isNullOrBlank() && capabilities.canReadInventory) {
+                        showingSavedBirthsScreen = true
                     }
                 }
             )

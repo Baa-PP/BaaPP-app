@@ -128,3 +128,26 @@ sealed class BirthSaveResult {
     data class ValidationError(val message: String) : BirthSaveResult()
     data class Error(val message: String) : BirthSaveResult()
 }
+
+data class SavedBirthEvent(
+    val id: String,
+    val ranchId: String,
+    val damId: String,
+    val damFolio: String?,
+    val sireId: String?,
+    val sireFolio: String?,
+    val birthDateIso: String,
+    val liveBirths: Int,
+    val stillborns: Int,
+    val parturitionType: String,
+    val conceptionMethod: String,
+    val hasPhoto: Boolean,
+    val registeredByUserId: String?,
+    val notes: String?,
+    val createdAt: String
+)
+
+object BirthImmutabilityPolicy {
+    const val AUDITED_CORRECTION_NOTICE =
+        "Los nacimientos guardados son inmutables. No se pueden editar cantidades ni eliminar registros en la app. Si hubo un error, repórtalo con foto a la Asociación/Técnico para su corrección auditada."
+}

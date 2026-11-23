@@ -263,7 +263,7 @@ SELECT COUNT(*) FROM pending_sync_events
 WHERE sync_status = 'PENDING' AND local_photo_path = :localPhotoPath;
 
 insertBirthEvent:
-INSERT OR REPLACE INTO local_birth_events (
+INSERT INTO local_birth_events (
     id, ranch_id, dam_id, sire_id, birth_date,
     live_births, stillborns, parturition_type, conception_method,
     photo_s3_key, local_photo_path, registered_by_user_id, notes,
