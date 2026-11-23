@@ -23,6 +23,7 @@ CREATE TABLE local_animals (
     mortality_date TEXT,
     mortality_cause TEXT,
     life_stage TEXT NOT NULL,
+    life_stage_at_death TEXT,
     reproductive_status TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ACTIVE',
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -67,7 +68,10 @@ CREATE TABLE pending_sync_events (
     occurred_at TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     local_photo_path TEXT,
-    sync_status TEXT NOT NULL DEFAULT 'PENDING'
+    sync_status TEXT NOT NULL DEFAULT 'PENDING',
+    -- Orden de escritura (FIFO). occurred_at tiene precisión de milisegundo y depende del reloj del
+    -- celular, y mutation_id es UUIDv7 con bits aleatorios: ninguno de los dos garantiza el orden causal.
+    sequence INTEGER NOT NULL DEFAULT 0
 );
 
 -- Performance Indexes
@@ -86,6 +90,10 @@ CREATE INDEX idx_local_birth_events_dam ON local_birth_events (dam_id);
 CREATE INDEX idx_local_weight_measurements_animal_date ON local_weight_measurements (animal_id, measurement_date DESC);
 CREATE INDEX idx_local_weight_measurements_ranch ON local_weight_measurements (ranch_id);
 
+CREATE INDEX idx_pending_sync_events_status_sequence ON pending_sync_events (sync_status, sequence);
+-- MAX(sequence) en cada inserción: con sequence a la izquierda SQLite lo resuelve sin recorrer el historial.
+CREATE INDEX idx_pending_sync_events_sequence ON pending_sync_events (sequence);
+
 insertPendingSyncEvent:
 INSERT INTO pending_sync_events (
     mutation_id, entity_type, operation, occurred_at,
@@ -96,10 +104,26 @@ INSERT INTO pending_sync_events (
 );
 
 -- Queries: sync
+insertSyncEvent:
+INSERT INTO pending_sync_events (
+    mutation_id, entity_type, operation, occurred_at, payload_json, local_photo_path, sync_status, sequence
+) VALUES (
+    ?, ?, ?, ?, ?, ?, 'PENDING',
+    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending_sync_events)
+);
+
 selectPendingSyncEvents:
 SELECT * FROM pending_sync_events
 WHERE sync_status = 'PENDING'
-ORDER BY occurred_at ASC;
+ORDER BY sequence ASC;
+
+countPendingSyncEvents:
+SELECT COUNT(*) FROM pending_sync_events
+WHERE sync_status = 'PENDING';
+
+-- Filas cambiadas por el último INSERT/UPDATE de esta conexión (para writeAndEnqueueIfChanged).
+changedRows:
+SELECT changes();
 
 selectLatestLocalPhotoByAnimalId:
 SELECT local_photo_path FROM pending_sync_events
@@ -211,6 +235,11 @@ selectAnimalById:
 SELECT * FROM local_animals
 WHERE id = :id;
 
+selectAnimalForWeighing:
+SELECT id, ranch_id, sex, birth_date, status, mortality_date
+FROM local_animals
+WHERE id = :id;
+
 selectAnimalByFolio:
 SELECT * FROM local_animals
 WHERE ranch_id = :ranchId AND folio_interno = :folioInterno;
@@ -298,6 +327,25 @@ UPDATE local_animals
 SET status = :status, mortality_date = :mortalityDate, mortality_cause = :mortalityCause, updated_at = CURRENT_TIMESTAMP
 WHERE id = :id;
 
+-- APP-19: bajas sin borrado físico. Nunca hay DELETE sobre local_animals (NoPhysicalDeleteTest).
+markAnimalDeceased:
+UPDATE local_animals
+SET status = 'DECEASED', mortality_date = :mortalityDate, mortality_cause = :mortalityCause,
+    life_stage_at_death = :lifeStageAtDeath, updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE';
+
+markAnimalSold:
+UPDATE local_animals
+SET status = 'SOLD', updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE';
+
+selectMortalitySummary:
+SELECT mortality_cause, life_stage_at_death, COUNT(*) AS deaths
+FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'DECEASED' AND mortality_date BETWEEN :fromDate AND :toDate
+GROUP BY mortality_cause, life_stage_at_death
+ORDER BY deaths DESC, mortality_cause;
+
 -- Queries: local_birth_events (paginated & indexed)
 selectBirthEventsByRanchPaged:
 SELECT * FROM local_birth_events
@@ -340,6 +388,13 @@ WHERE animal_id = :animalId
 ORDER BY measurement_date DESC
 LIMIT 1;
 
+-- APP-15: historial completo para la GDP local, en el mismo orden que el backend (fecha, id).
+selectWeightsByAnimalChronological:
+SELECT id, milestone, measurement_date, weight_kg, scrotal_circumference_cm
+FROM local_weight_measurements
+WHERE animal_id = :animalId
+ORDER BY measurement_date, id;
+
 insertWeightMeasurement:
 INSERT OR REPLACE INTO local_weight_measurements (
     id, ranch_id, animal_id, milestone, weight_kg,
@@ -350,3 +405,42 @@ INSERT OR REPLACE INTO local_weight_measurements (
     ?, ?, ?,
     ?, ?
 );
+
+-- APP-16: crías sin destetar para la lista de destetes (usa idx_local_animals_weaning_pending).
+selectUnweanedAnimals:
+SELECT id, folio_interno, sex, birth_date
+FROM local_animals
+WHERE ranch_id = :ranchId
+  AND status = 'ACTIVE'
+  -- Solo crías: un adulto comprado sin fecha de destete no debe aparecer como destete pendiente.
+  AND life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT')
+  AND weaning_date IS NULL
+  AND mortality_date IS NULL
+  AND birth_date <= :bornOnOrBefore
+ORDER BY birth_date, folio_interno;
+-- APP-18: Confirmar destete (espejo de ConfirmWeaningUseCase de BE-009)
+selectLambForWeaning:
+SELECT id, ranch_id, sex, birth_date, weaning_date, status, mortality_date, dam_id, life_stage
+FROM local_animals
+WHERE id = :id;
+
+selectWeaningWeightForAnimal:
+SELECT id, weight_kg, scrotal_circumference_cm, measurement_date
+FROM local_weight_measurements
+WHERE animal_id = :animalId AND milestone = 'WEANING'
+ORDER BY measurement_date DESC, id DESC
+LIMIT 1;
+
+updateAnimalWeaning:
+UPDATE local_animals
+SET weaning_date = :weaningDate, life_stage = :lifeStage, status = :status, updated_at = :updatedAt
+WHERE id = :id AND status = 'ACTIVE' AND weaning_date IS NULL;
+
+selectReproductiveStatus:
+SELECT reproductive_status FROM local_animals
+WHERE id = :id AND ranch_id = :ranchId;
+
+markMotherEmptyAfterWeaning:
+UPDATE local_animals
+SET reproductive_status = 'EMPTY', updated_at = :updatedAt
+WHERE id = :id AND ranch_id = :ranchId AND reproductive_status = 'LACTATING';

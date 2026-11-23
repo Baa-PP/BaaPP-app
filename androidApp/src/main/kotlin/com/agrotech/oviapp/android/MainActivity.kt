@@ -48,6 +48,7 @@ import com.agrotech.oviapp.android.ui.AnimalFormScreen
 import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.InventoryScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
+import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
 import com.agrotech.oviapp.animals.domain.model.AnimalFormState
@@ -80,7 +81,7 @@ class MainActivity : ComponentActivity() {
         )[MainAppViewModel::class.java]
 
         setContent {
-            MaterialTheme {
+            OviTheme {
                 Surface {
                     MainApp(viewModel = viewModel)
                 }
