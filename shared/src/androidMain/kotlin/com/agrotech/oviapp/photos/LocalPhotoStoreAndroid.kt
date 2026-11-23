@@ -32,8 +32,8 @@ actual object LocalPhotoCompressor {
         val hasNormalOrientation = orientation == ExifInterface.ORIENTATION_NORMAL ||
             orientation == ExifInterface.ORIENTATION_UNDEFINED
 
-        // Preserve unchanged bytes only when already within the target window, format matches, and no rotation/flip is needed.
-        if (inputBytes.size in minBytes..maxBytes &&
+        // Preserve unchanged bytes when already <= maxBytes, format matches, and no rotation/flip is needed.
+        if (inputBytes.size <= maxBytes &&
             mimeMatchesFormat(bounds.outMimeType, format) &&
             hasNormalOrientation
         ) {
@@ -45,10 +45,11 @@ actual object LocalPhotoCompressor {
         }
         val decoded = BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, decodeOpts)
             ?: throw IllegalArgumentException("No se pudo decodificar la imagen seleccionada.")
-        var bitmap = applyExifOrientation(decoded, orientation)
+        var bitmap = decoded
 
         val compressFormat = resolveAndroidCompressFormat(format)
         try {
+            bitmap = applyExifOrientation(decoded, orientation)
             var compressed = findBestQuality(bitmap, compressFormat, minBytes, maxBytes)
 
             while (compressed.size > maxBytes && maxOf(bitmap.width, bitmap.height) > 100) {
@@ -69,7 +70,9 @@ actual object LocalPhotoCompressor {
             }
             return CompressedPhoto(bytes = compressed, format = format, sizeBytes = compressed.size)
         } finally {
-            bitmap.recycle()
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
         }
     }
 
@@ -79,9 +82,14 @@ actual object LocalPhotoCompressor {
         minBytes: Int,
         maxBytes: Int
     ): ByteArray {
-        var low = 35
+        val lowestCandidate = encodeBitmap(bitmap, compressFormat, 35)
+        if (lowestCandidate.size > maxBytes) {
+            return lowestCandidate
+        }
+
+        var low = 36
         var high = 95
-        var bestUnderMax: ByteArray? = null
+        var bestUnderMax = lowestCandidate
 
         while (low <= high) {
             val mid = (low + high) / 2
@@ -96,7 +104,7 @@ actual object LocalPhotoCompressor {
                 high = mid - 1
             }
         }
-        return bestUnderMax ?: encodeBitmap(bitmap, compressFormat, 35)
+        return bestUnderMax
     }
 
     private fun encodeBitmap(
@@ -105,7 +113,10 @@ actual object LocalPhotoCompressor {
         quality: Int
     ): ByteArray {
         val out = ByteArrayOutputStream()
-        bitmap.compress(compressFormat, quality, out)
+        val ok = bitmap.compress(compressFormat, quality, out)
+        check(ok && out.size() > 0) {
+            "No se pudo codificar la fotografía comprimida."
+        }
         return out.toByteArray()
     }
 
@@ -175,30 +186,55 @@ actual object LocalPhotoCompressor {
 }
 
 actual object LocalPhotoFileOps {
+    private val safeFileNameRegex = Regex("^[A-Za-z0-9._-]{1,180}$")
+
     actual fun writeAtomically(directoryPath: String, fileName: String, bytes: ByteArray): String {
-        val dir = File(directoryPath).apply { mkdirs() }
-        val tempFile = File(dir, "$fileName.tmp")
-        val targetFile = File(dir, fileName)
-        FileOutputStream(tempFile).use { fos ->
-            fos.write(bytes)
-            fos.fd.sync()
+        require(bytes.isNotEmpty()) { "No se puede guardar una fotografía vacía." }
+        require(safeFileNameRegex.matches(fileName) && !fileName.contains("..")) {
+            "Nombre de archivo inválido."
         }
-        if (!tempFile.renameTo(targetFile)) {
-            tempFile.copyTo(targetFile, overwrite = true)
-            tempFile.delete()
+        val dir = File(directoryPath).apply { mkdirs() }.canonicalFile
+        val tempFile = File(dir, "$fileName.tmp").canonicalFile
+        val targetFile = File(dir, fileName).canonicalFile
+        require(tempFile.parentFile == dir && targetFile.parentFile == dir) {
+            "Ruta de destino fuera del directorio permitido."
         }
-        return targetFile.absolutePath
+        try {
+            FileOutputStream(tempFile).use { fos ->
+                fos.write(bytes)
+                fos.fd.sync()
+            }
+            if (!tempFile.renameTo(targetFile)) {
+                tempFile.copyTo(targetFile, overwrite = true)
+                tempFile.delete()
+            }
+            return targetFile.canonicalPath
+        } catch (t: Throwable) {
+            runCatching { if (tempFile.exists()) tempFile.delete() }
+            throw t
+        }
+    }
+
+    actual fun canonicalize(path: String): String? {
+        if (path.isBlank()) return null
+        return runCatching { File(path.trim()).canonicalPath }.getOrNull()
     }
 
     actual fun exists(path: String): Boolean {
         if (path.isBlank()) return false
-        val file = File(path)
+        val file = File(path.trim())
         return file.exists() && file.isFile && file.canRead()
     }
 
-    actual fun deleteIfExists(path: String): Boolean {
+    actual fun deleteIfExists(path: String, allowedDirectoryPath: String?): Boolean {
         if (path.isBlank()) return false
-        val file = File(path)
-        return file.exists() && file.delete()
+        val targetFile = runCatching { File(path.trim()).canonicalFile }.getOrNull() ?: return false
+        if (allowedDirectoryPath != null) {
+            val allowedDir = runCatching { File(allowedDirectoryPath).canonicalFile }.getOrNull() ?: return false
+            if (targetFile.parentFile != allowedDir) {
+                return false
+            }
+        }
+        return targetFile.exists() && targetFile.isFile && targetFile.delete()
     }
 }

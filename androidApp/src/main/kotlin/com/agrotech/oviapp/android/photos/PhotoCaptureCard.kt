@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -45,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
+import com.agrotech.oviapp.android.ui.theme.FieldDimens
+import com.agrotech.oviapp.android.ui.theme.FieldPalette
 import com.agrotech.oviapp.photos.LocalPhotoCompressor
 import com.agrotech.oviapp.photos.LocalPhotoFileOps
 import com.agrotech.oviapp.photos.PhotoCompressionConfig
@@ -53,13 +54,14 @@ import com.agrotech.oviapp.photos.StoredLocalPhoto
 import com.agrotech.oviapp.sync.UuidV7
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 
-private val PhotoCardGreen = Color(0xFF1B5E20)
+private val PhotoCardGreen = Color(FieldPalette.PASTURE)
 private val PhotoCardSoftGreen = Color(0xFFE8F5E9)
 
 /**
@@ -82,10 +84,12 @@ fun PhotoCaptureCard(
     val scope = rememberCoroutineScope()
     var isProcessing by remember { mutableStateOf(false) }
     var pendingCameraFilePath by rememberSaveable { mutableStateOf<String?>(null) }
+    var lastOwnedDraftPath by rememberSaveable { mutableStateOf<String?>(null) }
 
     fun processSourceUri(sourceUri: Uri, cleanupSourceFile: File? = null) {
         scope.launch {
             isProcessing = true
+            val previousDraft = lastOwnedDraftPath
             try {
                 val stored = withContext(Dispatchers.IO) {
                     val stream = context.contentResolver.openInputStream(sourceUri)
@@ -102,19 +106,27 @@ fun PhotoCaptureCard(
                         fileName = fileName,
                         bytes = compressed.bytes
                     )
+                    if (previousDraft != null && previousDraft != savedPath) {
+                        LocalPhotoFileOps.deleteIfExists(previousDraft, pendingDir.absolutePath)
+                    }
                     StoredLocalPhoto(
                         localPhotoPath = savedPath,
                         sizeBytes = compressed.sizeBytes,
                         format = compressed.format
                     )
                 }
+                lastOwnedDraftPath = stored.localPhotoPath
                 onPhotoReady(stored)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 onError(e.message ?: "Error al comprimir la fotografía.")
             } finally {
-                cleanupSourceFile?.delete()
+                if (cleanupSourceFile != null) {
+                    withContext(NonCancellable + Dispatchers.IO) {
+                        runCatching { cleanupSourceFile.delete() }
+                    }
+                }
                 isProcessing = false
             }
         }
@@ -125,24 +137,35 @@ fun PhotoCaptureCard(
     ) { success ->
         val savedPath = pendingCameraFilePath
         pendingCameraFilePath = null
-        val capturedFile = savedPath?.let { File(it) }
-        if (success && capturedFile != null && capturedFile.exists()) {
-            val uri = Uri.fromFile(capturedFile)
-            processSourceUri(uri, cleanupSourceFile = capturedFile)
-        } else {
-            capturedFile?.delete()
+        if (savedPath == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val capturedFile = File(savedPath)
+            val exists = withContext(Dispatchers.IO) { capturedFile.exists() && capturedFile.length() > 0L }
+            if (success && exists) {
+                processSourceUri(Uri.fromFile(capturedFile), cleanupSourceFile = capturedFile)
+            } else {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { capturedFile.delete() }
+                }
+            }
         }
     }
 
     fun launchCameraCapture() {
-        val (file, contentUri) = createCameraTempFileUri(context)
-        pendingCameraFilePath = file.absolutePath
-        try {
-            cameraLauncher.launch(contentUri)
-        } catch (e: ActivityNotFoundException) {
-            pendingCameraFilePath = null
-            file.delete()
-            onError("No se encontró una aplicación de cámara disponible. Puedes usar la opción Galería.")
+        scope.launch {
+            val (file, contentUri) = withContext(Dispatchers.IO) {
+                createCameraTempFileUri(context)
+            }
+            pendingCameraFilePath = file.absolutePath
+            try {
+                cameraLauncher.launch(contentUri)
+            } catch (e: ActivityNotFoundException) {
+                pendingCameraFilePath = null
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { file.delete() }
+                }
+                onError("No se encontró una aplicación de cámara disponible. Puedes usar la opción Galería.")
+            }
         }
     }
 
@@ -167,7 +190,10 @@ fun PhotoCaptureCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -197,7 +223,7 @@ fun PhotoCaptureCard(
                     enabled = enabled && !isProcessing,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 52.dp),
+                        .heightIn(min = FieldDimens.MIN_TOUCH_TARGET_DP.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = PhotoCardGreen)
                 ) {
@@ -209,7 +235,7 @@ fun PhotoCaptureCard(
                     enabled = enabled && !isProcessing,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 52.dp),
+                        .heightIn(min = FieldDimens.MIN_TOUCH_TARGET_DP.dp),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text("Galería")
@@ -235,7 +261,7 @@ fun PhotoCaptureCard(
                         .fillMaxWidth()
                         .height(180.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFFECEFF1))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                 )
 
                 val kbLabel = photoSizeBytes?.let { "${it / 1024} KB" } ?: "Lista"

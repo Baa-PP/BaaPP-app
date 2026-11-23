@@ -88,4 +88,56 @@ class LocalPhotoRetentionTest {
             driver.close()
         }
     }
+
+    @Test
+    fun rejectsTraversalZeroBytesAndNonCanonicalRetentionBypass() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        OviAppDatabase.Schema.create(driver)
+        val database = OviAppDatabase(driver)
+        val syncQueue = PendingSyncQueue(database)
+        val retention = LocalPhotoRetentionManager(database)
+        val tempDir = Files.createTempDirectory("baapp_photo_sec_test").toFile()
+        val outsideFile = Files.createTempFile("baapp_outside", ".txt").toFile()
+        try {
+            assertFailsWith<IllegalArgumentException> {
+                retention.persistPendingPhoto(
+                    tempDir.absolutePath,
+                    CompressedPhoto(ByteArray(1024) { 1 }, PhotoFormat.JPEG),
+                    photoId = "../escape"
+                )
+            }
+            assertFailsWith<IllegalArgumentException> {
+                retention.persistPendingPhoto(
+                    tempDir.absolutePath,
+                    CompressedPhoto(ByteArray(0), PhotoFormat.JPEG),
+                    photoId = "empty-photo"
+                )
+            }
+
+            val stored = retention.persistPendingPhoto(
+                tempDir.absolutePath,
+                CompressedPhoto(ByteArray(4096) { 2 }, PhotoFormat.JPEG),
+                photoId = "canonical-check"
+            )
+            syncQueue.writeAndEnqueue(
+                entityType = SyncEntityType.BIRTH_EVENT,
+                operation = SyncOperation.CREATE,
+                payloadJson = """{"id":"b1"}""",
+                localPhotoPath = stored.localPhotoPath
+            ) { }
+
+            val nonCanonical = "${tempDir.absolutePath}${java.io.File.separator}.${java.io.File.separator}photo_canonical-check.jpg"
+            assertTrue(retention.isReferencedByPendingUpload(nonCanonical))
+            assertFalse(retention.deleteIfUploadedAndUnreferenced(nonCanonical, tempDir.absolutePath))
+            assertTrue(LocalPhotoFileOps.exists(stored.localPhotoPath))
+
+            // Directory confinement prevents deleting files outside allowedDirectoryPath
+            assertFalse(retention.deleteIfUploadedAndUnreferenced(outsideFile.absolutePath, tempDir.absolutePath))
+            assertTrue(outsideFile.exists())
+        } finally {
+            outsideFile.delete()
+            tempDir.deleteRecursively()
+            driver.close()
+        }
+    }
 }
