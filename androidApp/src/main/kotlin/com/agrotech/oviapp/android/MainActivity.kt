@@ -1,9 +1,13 @@
 package com.agrotech.oviapp.android
 
+import android.Manifest
 import android.app.Application
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import app.cash.sqldelight.db.SqlDriver
@@ -50,6 +55,9 @@ import com.agrotech.oviapp.android.ui.HomeScreen
 import com.agrotech.oviapp.android.ui.InventoryScreen
 import com.agrotech.oviapp.android.ui.LoginScreen
 import com.agrotech.oviapp.android.ui.SavedBirthEventsScreen
+import com.agrotech.oviapp.android.notifications.DeviceTokenWorker
+import com.agrotech.oviapp.android.notifications.Notifications
+import com.agrotech.oviapp.android.notifications.WeaningNotifications
 import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
@@ -69,21 +77,33 @@ import com.agrotech.oviapp.db.DatabaseDriverFactory
 import com.agrotech.oviapp.db.OviAppDatabase
 import com.agrotech.oviapp.domain.model.LifeStage
 import com.agrotech.oviapp.domain.model.ReproductiveStatus
+import com.agrotech.oviapp.notifications.WeaningAlert
 import com.agrotech.oviapp.summary.RanchSummaryUseCase
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private lateinit var viewModel: MainAppViewModel
+
+    private val notificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* sin permiso no se muestran avisos */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val viewModel = ViewModelProvider(
-            this,
-            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-        )[MainAppViewModel::class.java]
+        // La fábrica por defecto de ComponentActivity entrega Application y SavedStateHandle al ViewModel.
+        viewModel = ViewModelProvider(this)[MainAppViewModel::class.java]
+
+        // Solo en el primer arranque: al recrear la Activity (rotación) el aviso ya se atendió.
+        if (savedInstanceState == null) {
+            WeaningNotifications.alertFrom(intent)?.let(viewModel::openWeaningAlert)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
             OviTheme {
@@ -93,9 +113,20 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        WeaningNotifications.alertFrom(intent)?.let { alert ->
+            setIntent(intent)
+            viewModel.openWeaningAlert(alert)
+        }
+    }
 }
 
-class MainAppViewModel(application: Application) : AndroidViewModel(application) {
+class MainAppViewModel(
+    application: Application,
+    private val savedState: SavedStateHandle,
+) : AndroidViewModel(application) {
     var state by mutableStateOf<InitialState>(InitialState.Loading)
         private set
     var currentSession by mutableStateOf<AuthSession?>(null)
@@ -105,6 +136,13 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
     var animalSaveState by mutableStateOf<AnimalSaveUiState>(AnimalSaveUiState.Idle)
         private set
     var birthSaveState by mutableStateOf<BirthSaveUiState>(BirthSaveUiState.Idle)
+        private set
+
+    /**
+     * Aviso de destete tocado (APP-17) que la navegación debe abrir cuando haya sesión. Se guarda también en
+     * el SavedStateHandle: si Android mata el proceso antes del login, el aviso sigue pendiente al volver.
+     */
+    var pendingWeaningAlert by mutableStateOf(restoreWeaningAlert())
         private set
 
     private val lifecycleLock = Any()
@@ -121,7 +159,41 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateSession(newSession: AuthSession?) {
+        val previous = currentSession
         currentSession = newSession
+        onSessionChanged(previous, newSession)
+    }
+
+    fun openWeaningAlert(alert: WeaningAlert) {
+        pendingWeaningAlert = alert
+        savedState[WEANING_ALERT_KEY] = HashMap(alert.toData())
+    }
+
+    /** Ya atendido: se borra también del estado guardado para que no se vuelva a abrir. */
+    fun weaningAlertHandled() {
+        pendingWeaningAlert = null
+        savedState.remove<HashMap<String, String>>(WEANING_ALERT_KEY)
+    }
+
+    private fun restoreWeaningAlert(): WeaningAlert? =
+        savedState.get<HashMap<String, String>>(WEANING_ALERT_KEY)?.let { WeaningAlert.fromData(it) }
+
+    private var sessionWork: Job? = null
+
+    /**
+     * Al entrar se registra el celular; al salir el siguiente usuario debe registrarlo de nuevo. Los cambios
+     * de sesión se procesan uno tras otro: el registro del usuario nuevo nunca se encola antes de que termine
+     * el logout pendiente del anterior.
+     */
+    private fun onSessionChanged(previous: AuthSession?, current: AuthSession?) {
+        val context = getApplication<Application>()
+        val userLeft = previous != null && (current == null || current.username != previous.username)
+        val pending = sessionWork
+        sessionWork = viewModelScope.launch {
+            pending?.join()
+            if (userLeft) Notifications.registrar(context).onLogout()
+            if (current != null) DeviceTokenWorker.enqueue(context)
+        }
     }
 
     fun saveAnimal(draftKey: String, formState: AnimalFormState) {
@@ -224,6 +296,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
                         auth
                     }
                     authToClose?.close()
+                    Notifications.resetSessionCache()
                     initializeInternal()
                 } else {
                     state = InitialState.Error("No se pudo restablecer el almacenamiento seguro.")
@@ -313,6 +386,7 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
             } ?: return
             if (synchronized(lifecycleLock) { isCleared }) return
             currentSession = dependencies.second
+            onSessionChanged(null, dependencies.second)
             state = InitialState.Ready(dependencies.first)
         } catch (e: CancellationException) {
             throw e
@@ -343,6 +417,8 @@ class MainAppViewModel(application: Application) : AndroidViewModel(application)
         driverToClose?.close()
     }
 }
+
+private const val WEANING_ALERT_KEY = "pending_weaning_alert"
 
 sealed interface AnimalSaveUiState {
     data object Idle : AnimalSaveUiState
@@ -406,7 +482,9 @@ private fun MainApp(viewModel: MainAppViewModel) {
                 onResetAnimalSaveState = { viewModel.resetAnimalSaveState() },
                 birthSaveState = viewModel.birthSaveState,
                 onSaveBirthEvent = { key, draft, today -> viewModel.saveBirthEvent(key, draft, today) },
-                onResetBirthSaveState = { viewModel.resetBirthSaveState() }
+                onResetBirthSaveState = { viewModel.resetBirthSaveState() },
+                weaningAlert = viewModel.pendingWeaningAlert,
+                onWeaningAlertHandled = { viewModel.weaningAlertHandled() }
             )
         }
         is InitialState.Error -> {
@@ -529,7 +607,9 @@ fun AppNavigation(
     onResetAnimalSaveState: () -> Unit = {},
     birthSaveState: BirthSaveUiState = BirthSaveUiState.Idle,
     onSaveBirthEvent: (String, BirthEventDraft, String) -> Unit = { _, _, _ -> },
-    onResetBirthSaveState: () -> Unit = {}
+    onResetBirthSaveState: () -> Unit = {},
+    weaningAlert: WeaningAlert? = null,
+    onWeaningAlertHandled: () -> Unit = {}
 ) {
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
@@ -546,6 +626,18 @@ fun AppNavigation(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+
+    // Tocar un aviso de destete abre la ficha del cordero, solo si es del rancho de la sesión activa.
+    LaunchedEffect(weaningAlert, session) {
+        val alert = weaningAlert ?: return@LaunchedEffect
+        val activeSession = session ?: return@LaunchedEffect
+        if (alert.ranchId == activeSession.ranchId) {
+            // Como al entrar desde el inventario: sin historial previo, "atrás" no repite el mismo cordero.
+            detailBackStack = emptyList()
+            currentScreen = AppScreen.AnimalDetail(alert.animalId)
+        }
+        onWeaningAlertHandled()
+    }
 
     if (session != null) {
         val currentRanchId = session.ranchId
