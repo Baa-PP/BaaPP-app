@@ -132,7 +132,8 @@ class KtorDeviceTokenApi(
 ) : DeviceTokenApi {
     // encodeDefaults: sin esto "platform" (valor por defecto) no viajaría en el cuerpo.
     private val requestJson = Json { encodeDefaults = true }
-    private val endpoint = baseUrl.trimEnd('/') + "/api/v1/notifications/device-token"
+    // Acepta tanto "https://host" como "https://host/api/v1" (formato de KtorAuthService.DEFAULT_BASE_URL).
+    private val endpoint = baseUrl.trimEnd('/').removeSuffix("/api/v1") + "/api/v1/notifications/device-token"
 
     override suspend fun register(request: DeviceTokenRequest) {
         val jwt = accessToken() ?: throw DeviceTokenRegistrationException("No hay sesión para registrar el dispositivo.")

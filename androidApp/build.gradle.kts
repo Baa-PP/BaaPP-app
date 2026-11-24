@@ -27,7 +27,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        val apiBaseUrl = providers.gradleProperty("baapp.apiBaseUrl").getOrElse("http://10.0.2.2:8080")
+        val apiBaseUrl = providers.gradleProperty("baapp.apiBaseUrl").getOrElse("")
         buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
     }
     compileOptions {
@@ -48,7 +48,6 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.fragment)
     implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.okhttp)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation("io.coil-kt:coil-compose:2.7.0")

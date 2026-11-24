@@ -58,7 +58,6 @@ import com.agrotech.oviapp.android.ui.SavedBirthEventsScreen
 import com.agrotech.oviapp.android.notifications.DeviceTokenWorker
 import com.agrotech.oviapp.android.notifications.Notifications
 import com.agrotech.oviapp.android.notifications.WeaningNotifications
-import com.agrotech.oviapp.android.session.SessionProvider
 import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
@@ -155,11 +154,6 @@ class MainAppViewModel(
     private var cachedBirthEventRepository: BirthEventRepository? = null
 
     init {
-        // El token FCM se registra con el JWT de la sesión activa (BE-015).
-        Notifications.session = object : SessionProvider {
-            override suspend fun accessToken(): String? = currentSession?.accessToken
-            override suspend fun accountId(): String? = currentSession?.username
-        }
         initialize()
     }
 
@@ -301,6 +295,7 @@ class MainAppViewModel(
                         auth
                     }
                     authToClose?.close()
+                    Notifications.resetSessionCache()
                     initializeInternal()
                 } else {
                     state = InitialState.Error("No se pudo restablecer el almacenamiento seguro.")

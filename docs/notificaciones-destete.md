@@ -42,9 +42,10 @@ Si el backend también manda el bloque `notification`, su título y texto se usa
 
 - Colocar `androidApp/google-services.json` del proyecto Firebase del equipo. Sin ese archivo la app
   compila y funciona, pero no se inicializa Firebase ni llegan pushes.
-- URL del backend: `./gradlew assembleDebug -Pbaapp.apiBaseUrl=https://...` (por defecto
-  `http://10.0.2.2:8080`, el host visto desde el emulador).
-- Sesión: `MainAppViewModel` entrega el JWT de la sesión activa (`Notifications.session`), encola
-  `DeviceTokenWorker` al iniciar sesión y llama a `onLogout()` al salir o cambiar de usuario.
+- URL del backend: usa `KtorAuthService.DEFAULT_BASE_URL` por defecto (HTTPS); se puede
+  sobreescribir con `./gradlew assembleDebug -Pbaapp.apiBaseUrl=https://...`.
+- Sesión: `Notifications` lee el JWT directamente de `AndroidEncryptedSessionStorage` y usa
+  `TokenRefreshInterceptor` (refresco automático en 401, incluso en background); `MainAppViewModel`
+  encola `DeviceTokenWorker` al iniciar sesión y llama a `onLogout()` al salir o cambiar de usuario.
 - Al tocar el aviso se abre la ficha del cordero (`AppScreen.AnimalDetail`) si es del rancho de la
   sesión activa.
