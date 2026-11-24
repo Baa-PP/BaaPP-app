@@ -464,3 +464,24 @@ markMotherEmptyAfterWeaning:
 UPDATE local_animals
 SET reproductive_status = 'EMPTY', updated_at = :updatedAt
 WHERE id = :id AND ranch_id = :ranchId AND reproductive_status = 'LACTATING';
+
+-- APP-25: tarjetas de la pantalla principal. Cada conteo usa el mismo filtro que su lista del inventario:
+-- hembras = selectEwesFilteredPaged, sementales = selectRamsWithMetricsPaged, crías = selectLambsFilteredPaged.
+selectRanchSummaryCounts:
+SELECT
+    COUNT(*) AS active_animals,
+    SUM(CASE WHEN sex = 'FEMALE' AND life_stage = 'ADULT' THEN 1 ELSE 0 END) AS ewes,
+    SUM(CASE WHEN sex = 'FEMALE' AND life_stage = 'ADULT' AND reproductive_status = 'PREGNANT' THEN 1 ELSE 0 END) AS pregnant_ewes,
+    SUM(CASE WHEN sex = 'FEMALE' AND life_stage = 'ADULT' AND reproductive_status = 'LACTATING' THEN 1 ELSE 0 END) AS lactating_ewes,
+    SUM(CASE WHEN sex = 'FEMALE' AND life_stage = 'ADULT' AND reproductive_status = 'EMPTY' THEN 1 ELSE 0 END) AS empty_ewes,
+    SUM(CASE WHEN sex = 'MALE' AND life_stage = 'ADULT' THEN 1 ELSE 0 END) AS rams,
+    SUM(CASE WHEN life_stage IN ('LAMB_LACTATING', 'LAMB_FATTENING', 'EWE_REPLACEMENT') THEN 1 ELSE 0 END) AS lambs,
+    SUM(CASE WHEN life_stage = 'LAMB_LACTATING' THEN 1 ELSE 0 END) AS lactating_lambs,
+    SUM(CASE WHEN life_stage = 'LAMB_FATTENING' THEN 1 ELSE 0 END) AS fattening_lambs,
+    SUM(CASE WHEN life_stage = 'EWE_REPLACEMENT' THEN 1 ELSE 0 END) AS replacement_lambs
+FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'ACTIVE';
+
+countDeathsBetween:
+SELECT COUNT(*) FROM local_animals
+WHERE ranch_id = :ranchId AND status = 'DECEASED' AND mortality_date BETWEEN :fromDate AND :toDate;
