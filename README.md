@@ -130,6 +130,16 @@ BaaPP-app/
 
 ---
 
+## Documentación Central (`Baa-PP/docs`)
+
+La documentación oficial del ecosistema se mantiene de forma centralizada en **[`Baa-PP/docs`](https://github.com/Baa-PP/docs)** (única fuente de verdad, sin copias locales en este repositorio):
+* **[Requerimientos Android (`REQUERIMIENTOS_ANDROID_APP.md`)](https://github.com/Baa-PP/docs/blob/main/requerimientos/REQUERIMIENTOS_ANDROID_APP.md)**
+* **[Lineamientos de UX de Campo (`lineamientos-ux-campo.md`)](https://github.com/Baa-PP/docs/blob/main/diseno-ui-ux/lineamientos-ux-campo.md)**
+* **[Estándares de Documentación (`DOCUMENTATION_STANDARDS.md`)](https://github.com/Baa-PP/docs/blob/main/guias/DOCUMENTATION_STANDARDS.md)**
+* **[Reglas de Commits y PRs (`COMMIT_AND_PR_RULES.md`)](https://github.com/Baa-PP/docs/blob/main/guias/COMMIT_AND_PR_RULES.md)**
+
+---
+
 ## Equipo de Desarrollo
 
 * **[Lucas Patrick Castineiras]** — Ingeniería de Software (5.º Semestre) · [GitHub](https://github.com/Locas1000)
