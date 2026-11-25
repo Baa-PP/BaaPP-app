@@ -58,6 +58,8 @@ import com.agrotech.oviapp.android.ui.SavedBirthEventsScreen
 import com.agrotech.oviapp.android.notifications.DeviceTokenWorker
 import com.agrotech.oviapp.android.notifications.Notifications
 import com.agrotech.oviapp.android.notifications.WeaningNotifications
+import com.agrotech.oviapp.android.sync.OfflineSyncDependencies
+import com.agrotech.oviapp.android.sync.OfflineSyncWorker
 import com.agrotech.oviapp.android.ui.theme.OviTheme
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalCommandRepository
 import com.agrotech.oviapp.animals.data.SqlDelightAnimalInventoryRepository
@@ -79,6 +81,8 @@ import com.agrotech.oviapp.domain.model.LifeStage
 import com.agrotech.oviapp.domain.model.ReproductiveStatus
 import com.agrotech.oviapp.notifications.WeaningAlert
 import com.agrotech.oviapp.summary.RanchSummaryUseCase
+import com.agrotech.oviapp.sync.PendingSyncQueue
+import com.agrotech.oviapp.sync.SyncOutcome
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -137,6 +141,12 @@ class MainAppViewModel(
         private set
     var birthSaveState by mutableStateOf<BirthSaveUiState>(BirthSaveUiState.Idle)
         private set
+    var pendingSyncCount by mutableStateOf(0L)
+        private set
+    var isSyncing by mutableStateOf(false)
+        private set
+    var syncFeedback by mutableStateOf<String?>(null)
+        private set
 
     /**
      * Aviso de destete tocado (APP-17) que la navegación debe abrir cuando haya sesión. Se guarda también en
@@ -191,8 +201,68 @@ class MainAppViewModel(
         val pending = sessionWork
         sessionWork = viewModelScope.launch {
             pending?.join()
-            if (userLeft) Notifications.registrar(context).onLogout()
-            if (current != null) DeviceTokenWorker.enqueue(context)
+            if (userLeft) {
+                Notifications.registrar(context).onLogout()
+                OfflineSyncDependencies.resetSessionCache()
+            }
+            if (current != null) {
+                DeviceTokenWorker.enqueue(context)
+                OfflineSyncWorker.enqueueOnReconnect(context)
+            }
+        }
+    }
+
+    fun clearSyncFeedback() {
+        syncFeedback = null
+    }
+
+    fun syncNow() {
+        if (isSyncing) return
+        val context = getApplication<Application>()
+        isSyncing = true
+        viewModelScope.launch {
+            try {
+                when (val outcome = OfflineSyncDependencies.syncNow(context)) {
+                    is SyncOutcome.NothingToSync -> {
+                        syncFeedback = "Todo está sincronizado."
+                    }
+                    is SyncOutcome.NotAuthenticated -> {
+                        syncFeedback = "Inicia sesión para sincronizar los cambios."
+                    }
+                    is SyncOutcome.Success -> {
+                        syncFeedback = if (outcome.failedCount == 0) {
+                            "${outcome.syncedCount} cambio(s) sincronizado(s)."
+                        } else {
+                            OfflineSyncWorker.enqueueOnReconnect(context)
+                            "${outcome.syncedCount} sincronizado(s); ${outcome.failedCount} pendiente(s) de reintento."
+                        }
+                    }
+                    is SyncOutcome.RetryLater -> {
+                        OfflineSyncWorker.enqueueOnReconnect(context)
+                        syncFeedback = "Sin conexión o servidor ocupado. Se sincronizará automáticamente al reconectar."
+                    }
+                }
+                refreshPendingSyncCount()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                OfflineSyncWorker.enqueueOnReconnect(context)
+                syncFeedback = "No se pudo sincronizar ahora; se reintentará automáticamente."
+            } finally {
+                isSyncing = false
+            }
+        }
+    }
+
+    private fun refreshPendingSyncCount() {
+        val db = synchronized(lifecycleLock) {
+            if (isCleared) null else cachedDatabase
+        } ?: return
+        viewModelScope.launch {
+            val count = withContext(Dispatchers.IO) {
+                PendingSyncQueue(db).pendingCount()
+            }
+            pendingSyncCount = count
         }
     }
 
@@ -211,6 +281,8 @@ class MainAppViewModel(
                             draftKey = draftKey,
                             localPhotoPath = formState.localPhotoPath
                         )
+                        refreshPendingSyncCount()
+                        OfflineSyncWorker.enqueueOnReconnect(getApplication())
                     }
                     is AnimalSaveResult.DuplicateFolio -> {
                         animalSaveState = AnimalSaveUiState.Error(draftKey, res.message)
@@ -249,6 +321,8 @@ class MainAppViewModel(
                 when (val res = repo.saveBirthEventOffline(draft, todayDateIso, draftKey)) {
                     is BirthSaveResult.Success -> {
                         birthSaveState = BirthSaveUiState.Success(draftKey, draft.localPhotoPath)
+                        refreshPendingSyncCount()
+                        OfflineSyncWorker.enqueueOnReconnect(getApplication())
                     }
                     is BirthSaveResult.DuplicateFolio -> {
                         birthSaveState = BirthSaveUiState.Error(draftKey, res.message)
@@ -297,6 +371,7 @@ class MainAppViewModel(
                     }
                     authToClose?.close()
                     Notifications.resetSessionCache()
+                    OfflineSyncDependencies.resetSessionCache()
                     initializeInternal()
                 } else {
                     state = InitialState.Error("No se pudo restablecer el almacenamiento seguro.")
@@ -382,10 +457,14 @@ class MainAppViewModel(
                 }
 
                 val cachedSession = authRepo.getCachedSession()
-                deps to cachedSession
+                val initialPendingCount = PendingSyncQueue(
+                    synchronized(lifecycleLock) { cachedDatabase!! }
+                ).pendingCount()
+                Triple(deps, cachedSession, initialPendingCount)
             } ?: return
             if (synchronized(lifecycleLock) { isCleared }) return
             currentSession = dependencies.second
+            pendingSyncCount = dependencies.third
             onSessionChanged(null, dependencies.second)
             state = InitialState.Ready(dependencies.first)
         } catch (e: CancellationException) {
@@ -484,7 +563,12 @@ private fun MainApp(viewModel: MainAppViewModel) {
                 onSaveBirthEvent = { key, draft, today -> viewModel.saveBirthEvent(key, draft, today) },
                 onResetBirthSaveState = { viewModel.resetBirthSaveState() },
                 weaningAlert = viewModel.pendingWeaningAlert,
-                onWeaningAlertHandled = { viewModel.weaningAlertHandled() }
+                onWeaningAlertHandled = { viewModel.weaningAlertHandled() },
+                pendingSyncCount = viewModel.pendingSyncCount,
+                isSyncing = viewModel.isSyncing,
+                syncFeedback = viewModel.syncFeedback,
+                onSyncFeedbackShown = { viewModel.clearSyncFeedback() },
+                onSyncNowClick = { viewModel.syncNow() }
             )
         }
         is InitialState.Error -> {
@@ -609,7 +693,12 @@ fun AppNavigation(
     onSaveBirthEvent: (String, BirthEventDraft, String) -> Unit = { _, _, _ -> },
     onResetBirthSaveState: () -> Unit = {},
     weaningAlert: WeaningAlert? = null,
-    onWeaningAlertHandled: () -> Unit = {}
+    onWeaningAlertHandled: () -> Unit = {},
+    pendingSyncCount: Long = 0L,
+    isSyncing: Boolean = false,
+    syncFeedback: String? = null,
+    onSyncFeedbackShown: () -> Unit = {},
+    onSyncNowClick: () -> Unit = {}
 ) {
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
@@ -819,7 +908,12 @@ fun AppNavigation(
                         if (!session.ranchId.isNullOrBlank() && capabilities.canReadInventory) {
                             currentScreen = AppScreen.SavedBirthEvents
                         }
-                    }
+                    },
+                    pendingSyncCount = pendingSyncCount,
+                    isSyncing = isSyncing,
+                    syncFeedback = syncFeedback,
+                    onSyncFeedbackShown = onSyncFeedbackShown,
+                    onSyncNowClick = onSyncNowClick
                 )
             }
         }

@@ -69,12 +69,24 @@ fun HomeScreen(
     onOpenBirthEventClick: () -> Unit = {},
     onOpenSavedBirthsClick: () -> Unit = {},
     loadSummary: (suspend (ranchId: String) -> RanchSummary)? = null,
+    pendingSyncCount: Long = 0L,
+    isSyncing: Boolean = false,
+    syncFeedback: String? = null,
+    onSyncFeedbackShown: () -> Unit = {},
+    onSyncNowClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val capabilities = remember(session) { session.uiCapabilities() }
+
+    LaunchedEffect(syncFeedback) {
+        val message = syncFeedback ?: return@LaunchedEffect
+        snackbarHostState.currentSnackbarData?.dismiss()
+        snackbarHostState.showSnackbar(message)
+        onSyncFeedbackShown()
+    }
 
     val showUpcomingNotice: (String) -> Unit = { message ->
         scope.launch {
@@ -183,6 +195,31 @@ fun HomeScreen(
                             PermissionBadge("Edición", session.hasPermission(RanchPermission.EDICION))
                             PermissionBadge("Exportación", session.hasPermission(RanchPermission.EXPORTACION))
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (pendingSyncCount == 0L) {
+                            "Sincronización: Todo sincronizado"
+                        } else {
+                            "Sincronización: $pendingSyncCount cambio(s) pendiente(s)"
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            color = BaappPrimaryGreen
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onSyncNowClick,
+                        enabled = !isSyncing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                    ) {
+                        Text(if (isSyncing) "Sincronizando..." else "Sincronizar ahora")
                     }
                 }
             }
