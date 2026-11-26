@@ -145,10 +145,13 @@ class MainAppViewModel(
         private set
     var pendingSyncCount by mutableStateOf(0L)
         private set
+    var unownedPendingSyncCount by mutableStateOf(0L)
+        private set
     var isSyncing by mutableStateOf(false)
         private set
     var syncFeedback by mutableStateOf<String?>(null)
         private set
+    private var pendingCountRefreshGeneration = 0L
 
     /**
      * Aviso de destete tocado (APP-17) que la navegación debe abrir cuando haya sesión. Se guarda también en
@@ -182,6 +185,9 @@ class MainAppViewModel(
     fun updateSession(newSession: AuthSession?) {
         val previous = currentSession
         currentSession = newSession
+        if (previous?.username != newSession?.username) {
+            refreshPendingSyncCount()
+        }
         onSessionChanged(previous, newSession)
     }
 
@@ -265,16 +271,38 @@ class MainAppViewModel(
         }
     }
 
+    fun claimUnownedPendingMutations() {
+        val accountId = currentSession?.username?.takeIf { it.isNotBlank() } ?: return
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            val claimed = withContext(Dispatchers.IO) {
+                OfflineSyncDependencies.claimUnownedPendingForActiveAccount(context)
+            }
+            if (currentSession?.username == accountId) {
+                refreshPendingSyncCount()
+                if (claimed > 0L) {
+                    OfflineSyncWorker.enqueueOnReconnect(context)
+                    syncNow()
+                }
+            }
+        }
+    }
+
     private fun refreshPendingSyncCount() {
         val db = synchronized(lifecycleLock) {
             if (isCleared) null else cachedDatabase
         } ?: return
-        val accountId = currentSession?.username
+        val expectedAccountId = currentSession?.username
+        val generation = ++pendingCountRefreshGeneration
         viewModelScope.launch {
-            val count = withContext(Dispatchers.IO) {
-                PendingSyncQueue(db).pendingCountForAccount(accountId)
+            val (accountCount, unownedCount) = withContext(Dispatchers.IO) {
+                val queue = PendingSyncQueue(db)
+                queue.pendingCountForAccount(expectedAccountId) to queue.unownedPendingCount()
             }
-            pendingSyncCount = count
+            if (currentSession?.username == expectedAccountId && pendingCountRefreshGeneration == generation) {
+                pendingSyncCount = accountCount
+                unownedPendingSyncCount = unownedCount
+            }
         }
     }
 
@@ -463,22 +491,26 @@ class MainAppViewModel(
                     val births = cachedBirthEventRepository
                         ?: SqlDelightBirthEventRepository(
                             database = db,
-                            ioDispatcher = Dispatchers.IO
+                            ioDispatcher = Dispatchers.IO,
+                            sessionStorage = sessionStorage
                         ).also { cachedBirthEventRepository = it }
                     AppDependencies(authRepo, inv, cmd, births, RanchSummaryUseCase(db))
                 }
 
                 val cachedSession = authRepo.getCachedSession()
-                val initialPendingCount = PendingSyncQueue(
-                    synchronized(lifecycleLock) { cachedDatabase!! }
-                ).pendingCountForAccount(cachedSession?.username)
-                Triple(deps, cachedSession, initialPendingCount)
+                val queue = PendingSyncQueue(synchronized(lifecycleLock) { cachedDatabase!! })
+                val initialPendingCount = queue.pendingCountForAccount(cachedSession?.username)
+                val initialUnownedCount = queue.unownedPendingCount()
+                listOf(deps, cachedSession, initialPendingCount, initialUnownedCount)
             } ?: return
             if (synchronized(lifecycleLock) { isCleared }) return
-            currentSession = dependencies.second
-            pendingSyncCount = dependencies.third
-            onSessionChanged(null, dependencies.second)
-            state = InitialState.Ready(dependencies.first)
+            val depsReady = dependencies[0] as AppDependencies
+            val sessionReady = dependencies[1] as AuthSession?
+            currentSession = sessionReady
+            pendingSyncCount = dependencies[2] as Long
+            unownedPendingSyncCount = dependencies[3] as Long
+            onSessionChanged(null, sessionReady)
+            state = InitialState.Ready(depsReady)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -577,10 +609,12 @@ private fun MainApp(viewModel: MainAppViewModel) {
                 weaningAlert = viewModel.pendingWeaningAlert,
                 onWeaningAlertHandled = { viewModel.weaningAlertHandled() },
                 pendingSyncCount = viewModel.pendingSyncCount,
+                unownedPendingSyncCount = viewModel.unownedPendingSyncCount,
                 isSyncing = viewModel.isSyncing,
                 syncFeedback = viewModel.syncFeedback,
                 onSyncFeedbackShown = { viewModel.clearSyncFeedback() },
-                onSyncNowClick = { viewModel.syncNow() }
+                onSyncNowClick = { viewModel.syncNow() },
+                onClaimUnownedPendingClick = { viewModel.claimUnownedPendingMutations() }
             )
         }
         is InitialState.Error -> {
@@ -707,10 +741,12 @@ fun AppNavigation(
     weaningAlert: WeaningAlert? = null,
     onWeaningAlertHandled: () -> Unit = {},
     pendingSyncCount: Long = 0L,
+    unownedPendingSyncCount: Long = 0L,
     isSyncing: Boolean = false,
     syncFeedback: String? = null,
     onSyncFeedbackShown: () -> Unit = {},
-    onSyncNowClick: () -> Unit = {}
+    onSyncNowClick: () -> Unit = {},
+    onClaimUnownedPendingClick: () -> Unit = {}
 ) {
     var currentScreen by rememberSaveable(stateSaver = AppScreenSaver) {
         mutableStateOf<AppScreen>(AppScreen.Home)
@@ -922,10 +958,12 @@ fun AppNavigation(
                         }
                     },
                     pendingSyncCount = pendingSyncCount,
+                    unownedPendingSyncCount = unownedPendingSyncCount,
                     isSyncing = isSyncing,
                     syncFeedback = syncFeedback,
                     onSyncFeedbackShown = onSyncFeedbackShown,
-                    onSyncNowClick = onSyncNowClick
+                    onSyncNowClick = onSyncNowClick,
+                    onClaimUnownedPendingClick = onClaimUnownedPendingClick
                 )
             }
         }

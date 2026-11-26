@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.births.data
 
+import com.agrotech.oviapp.auth.domain.SessionStorage
 import com.agrotech.oviapp.births.domain.model.BirthEventDraft
 import com.agrotech.oviapp.births.domain.model.BirthSaveResult
 import com.agrotech.oviapp.births.domain.model.SavedBirthEvent
@@ -30,11 +31,16 @@ class SqlDelightBirthEventRepository(
     private val database: OviAppDatabase,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val clockMillis: () -> Long = ::currentEpochMillis,
-    private val photoExistsCheck: (String) -> Boolean = LocalPhotoFileOps::exists
+    private val photoExistsCheck: (String) -> Boolean = LocalPhotoFileOps::exists,
+    private val sessionStorage: SessionStorage? = null,
 ) : BirthEventRepository {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val syncQueue = PendingSyncQueue(database = database, nowMillis = clockMillis)
+    private val syncQueue = PendingSyncQueue(
+        database = database,
+        nowMillis = clockMillis,
+        currentAccountId = { sessionStorage?.getSession()?.username },
+    )
 
     override suspend fun saveBirthEventOffline(
         draft: BirthEventDraft,
@@ -44,6 +50,11 @@ class SqlDelightBirthEventRepository(
         val validationError = draft.validate(todayDateIso)
         if (validationError != null) {
             return@withContext BirthSaveResult.ValidationError(validationError)
+        }
+        if (sessionStorage != null && sessionStorage.getSession()?.username.isNullOrBlank()) {
+            return@withContext BirthSaveResult.ValidationError(
+                "No hay una cuenta activa para registrar el parto."
+            )
         }
 
         val cleanPhotoPath = draft.localPhotoPath?.trim()

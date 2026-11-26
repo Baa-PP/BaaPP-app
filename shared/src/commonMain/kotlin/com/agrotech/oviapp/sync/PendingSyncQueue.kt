@@ -124,6 +124,22 @@ class PendingSyncQueue(
         return queries.countPendingSyncEventsByAccount(owner).executeAsOne()
     }
 
+    fun unownedPendingCount(): Long =
+        queries.countUnownedPendingSyncEvents().executeAsOne()
+
+    /**
+     * Acción explícita de recuperación para capturas previas a la migración (account_id NULL).
+     * Nunca se llama automáticamente en login.
+     */
+    fun claimUnownedPendingForAccount(accountId: String): Long {
+        val owner = accountId.trim()
+        require(owner.isNotEmpty()) { "accountId no puede estar vacío" }
+        return database.transactionWithResult {
+            queries.claimUnownedPendingSyncEvents(owner)
+            changedRows()
+        }
+    }
+
     fun markSynced(mutationIds: Collection<String>) {
         database.transaction {
             mutationIds.forEach { queries.markSyncEventCompleted(it) }

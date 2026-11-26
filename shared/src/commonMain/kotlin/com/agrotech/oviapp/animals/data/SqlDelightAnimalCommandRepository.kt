@@ -65,7 +65,11 @@ class SqlDelightAnimalCommandRepository(
 ) : AnimalCommandRepository {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val syncQueue = PendingSyncQueue(database = database, nowMillis = clockMillis)
+    private val syncQueue = PendingSyncQueue(
+        database = database,
+        nowMillis = clockMillis,
+        currentAccountId = { sessionStorage?.getSession()?.username },
+    )
 
     override suspend fun saveAnimalOffline(formState: AnimalFormState): AnimalSaveResult = withContext(ioDispatcher) {
         val validationError = formState.validate()
@@ -76,6 +80,11 @@ class SqlDelightAnimalCommandRepository(
         val isEdit = !formState.id.isNullOrBlank()
         val activeSession = sessionStorage?.getSession()
         if (sessionStorage != null) {
+            if (activeSession?.username.isNullOrBlank()) {
+                return@withContext AnimalSaveResult.ValidationError(
+                    "No hay una cuenta activa para registrar el cambio."
+                )
+            }
             val capabilities = activeSession?.let(RanchAccessPolicy::resolveCapabilities)
             val allowed = if (isEdit) capabilities?.canEditGeneralRecords == true else capabilities?.canCapture == true
             if (!allowed) {

@@ -70,10 +70,12 @@ fun HomeScreen(
     onOpenSavedBirthsClick: () -> Unit = {},
     loadSummary: (suspend (ranchId: String) -> RanchSummary)? = null,
     pendingSyncCount: Long = 0L,
+    unownedPendingSyncCount: Long = 0L,
     isSyncing: Boolean = false,
     syncFeedback: String? = null,
     onSyncFeedbackShown: () -> Unit = {},
     onSyncNowClick: () -> Unit = {},
+    onClaimUnownedPendingClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -220,6 +222,24 @@ fun HomeScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
                     ) {
                         Text(if (isSyncing) "Sincronizando..." else "Sincronizar ahora")
+                    }
+
+                    if (unownedPendingSyncCount > 0L) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        InfoNoticeBanner(
+                            "Hay $unownedPendingSyncCount captura(s) previa(s) sin cuenta asignada. Asígnalas a tu cuenta actual para sincronizarlas."
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = onClaimUnownedPendingClick,
+                            enabled = !isSyncing,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 56.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Asignar a mi cuenta y sincronizar")
+                        }
                     }
                 }
             }

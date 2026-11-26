@@ -190,7 +190,48 @@ class OfflineSyncEngineTest {
 
         assertEquals(listOf(a1.mutationId), queue.pendingForAccount("alice").map { it.mutationId })
         assertEquals(1L, queue.pendingCountForAccount("alice"))
+        assertEquals(1L, queue.unownedPendingCount())
         assertEquals(emptyList(), queue.pendingForAccount(null))
         assertEquals(0L, queue.pendingCountForAccount(null))
+
+        val claimed = queue.claimUnownedPendingForAccount("alice")
+        assertEquals(1L, claimed)
+        assertEquals(0L, queue.unownedPendingCount())
+        assertEquals(2L, queue.pendingCountForAccount("alice"))
+    }
+
+    @Test
+    fun stopsBeforeSendingNextChunkWhenSessionAccountChangesMidRun() = runTest {
+        val qAlice = PendingSyncQueue(database, nowMillis = { nowMillis }, currentAccountId = { "alice" })
+        val m1 = qAlice.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, """{"id":"a1"}""") {}
+        qAlice.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, """{"id":"a2"}""") {}
+
+        var activeAccount = "alice"
+        var callCount = 0
+        val api = KtorSyncBatchApi(
+            httpClient = HttpClient(MockEngine {
+                callCount += 1
+                // Simula cambio de cuenta después del primer lote.
+                activeAccount = "bob"
+                respond(
+                    content = """{"results":[{"mutation_id":"${m1.mutationId}","status":"APPLIED"}]}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
+            }),
+            baseUrl = "https://api.baapp.mx",
+            accessToken = { if (activeAccount == "alice") "alice-jwt" else null },
+        )
+
+        val engine = OfflineSyncEngine(
+            queue = queue,
+            api = api,
+            batchSize = 1,
+            pendingProvider = { queue.pendingForAccount("alice") },
+        )
+        val outcome = engine.syncPending(isAuthenticated = { activeAccount == "alice" })
+
+        assertEquals(SyncOutcome.NotAuthenticated, outcome)
+        assertEquals(1, callCount, "No debe enviar el segundo lote tras cambiar de cuenta")
     }
 }

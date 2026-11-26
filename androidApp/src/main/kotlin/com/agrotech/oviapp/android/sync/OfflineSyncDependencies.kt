@@ -78,26 +78,56 @@ object OfflineSyncDependencies {
     fun pendingCount(context: Context): Long =
         PendingSyncQueue(database(context)).pendingCountForAccount(activeAccountId(context))
 
+    fun unownedPendingCount(context: Context): Long =
+        PendingSyncQueue(database(context)).unownedPendingCount()
+
+    fun claimUnownedPendingForActiveAccount(context: Context): Long {
+        val accountId = activeAccountId(context) ?: return 0L
+        return PendingSyncQueue(database(context)).claimUnownedPendingForAccount(accountId)
+    }
+
     fun engine(context: Context): OfflineSyncEngine {
         val appContext = context.applicationContext
+        val account = activeAccountId(appContext)
+        return createEngineForAccount(appContext, account)
+    }
+
+    private fun createEngineForAccount(appContext: Context, expectedAccount: String?): OfflineSyncEngine {
         val storage = sessionStorage(appContext)
         val queue = PendingSyncQueue(database(appContext))
         val api = KtorSyncBatchApi(
             httpClient = httpClient(appContext),
             baseUrl = apiBaseUrl,
-            accessToken = { storage.getSession()?.accessToken },
+            // Verifica antes de cada lote que la sesión almacenada siga perteneciendo a la cuenta del snapshot.
+            accessToken = {
+                val session = storage.getSession()
+                val currentAccount = session?.username?.takeIf { it.isNotBlank() }
+                if (expectedAccount != null && currentAccount == expectedAccount) {
+                    session.accessToken
+                } else {
+                    null
+                }
+            },
         )
         return OfflineSyncEngine(
             queue = queue,
             api = api,
-            pendingProvider = { queue.pendingForAccount(activeAccountId(appContext)) },
+            pendingProvider = { queue.pendingForAccount(expectedAccount) },
         )
     }
 
     suspend fun syncNow(context: Context): SyncOutcome = syncGate.withLock {
         withContext(Dispatchers.IO) {
             val appContext = context.applicationContext
-            engine(appContext).syncPending(isAuthenticated = { hasActiveSession(appContext) })
+            val snapshotAccount = activeAccountId(appContext)
+                ?: return@withContext SyncOutcome.NotAuthenticated
+            createEngineForAccount(appContext, snapshotAccount).syncPending(
+                isAuthenticated = {
+                    val session = sessionStorage(appContext).getSession()
+                    !session?.accessToken.isNullOrBlank() &&
+                        session?.username?.takeIf { it.isNotBlank() } == snapshotAccount
+                },
+            )
         }
     }
 
