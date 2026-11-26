@@ -47,6 +47,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import app.cash.sqldelight.db.SqlDriver
 import com.agrotech.oviapp.android.ui.AnimalDetailScreen
 import com.agrotech.oviapp.android.ui.AnimalFormScreen
@@ -166,6 +168,15 @@ class MainAppViewModel(
 
     init {
         initialize()
+        viewModelScope.launch {
+            WorkManager.getInstance(getApplication())
+                .getWorkInfosForUniqueWorkFlow(OfflineSyncWorker.UNIQUE_NAME)
+                .collect { infos ->
+                    if (infos.any { it.state == WorkInfo.State.SUCCEEDED }) {
+                        refreshPendingSyncCount()
+                    }
+                }
+        }
     }
 
     fun updateSession(newSession: AuthSession?) {
@@ -258,9 +269,10 @@ class MainAppViewModel(
         val db = synchronized(lifecycleLock) {
             if (isCleared) null else cachedDatabase
         } ?: return
+        val accountId = currentSession?.username
         viewModelScope.launch {
             val count = withContext(Dispatchers.IO) {
-                PendingSyncQueue(db).pendingCount()
+                PendingSyncQueue(db).pendingCountForAccount(accountId)
             }
             pendingSyncCount = count
         }
@@ -459,7 +471,7 @@ class MainAppViewModel(
                 val cachedSession = authRepo.getCachedSession()
                 val initialPendingCount = PendingSyncQueue(
                     synchronized(lifecycleLock) { cachedDatabase!! }
-                ).pendingCount()
+                ).pendingCountForAccount(cachedSession?.username)
                 Triple(deps, cachedSession, initialPendingCount)
             } ?: return
             if (synchronized(lifecycleLock) { isCleared }) return

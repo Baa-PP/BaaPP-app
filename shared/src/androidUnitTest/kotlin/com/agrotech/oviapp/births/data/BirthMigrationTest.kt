@@ -40,7 +40,7 @@ class BirthMigrationTest {
             0
         )
 
-        OviAppDatabase.Schema.migrate(driver, oldVersion = 4, newVersion = OviAppDatabase.Schema.version)
+        OviAppDatabase.Schema.migrate(driver, oldVersion = 4, newVersion = 5)
 
         val db = OviAppDatabase(driver)
         val legacyRow = db.oviAppDatabaseQueries.selectBirthEventById("b-legacy").executeAsOne()

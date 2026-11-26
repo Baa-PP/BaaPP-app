@@ -23,12 +23,14 @@ class OfflineSyncEngine internal constructor(
     private val api: SyncBatchApi,
     private val batchSize: Int = DEFAULT_BATCH_SIZE,
     private val json: Json = DefaultJson,
+    private val pendingProvider: () -> List<PendingMutation> = { queue.pending() },
 ) {
     constructor(
         queue: PendingSyncQueue,
         api: SyncBatchApi,
         batchSize: Int = DEFAULT_BATCH_SIZE,
-    ) : this(queue, api, batchSize, DefaultJson)
+        pendingProvider: () -> List<PendingMutation> = { queue.pending() },
+    ) : this(queue, api, batchSize, DefaultJson, pendingProvider)
 
     init {
         require(batchSize > 0) { "batchSize debe ser mayor a 0" }
@@ -42,7 +44,7 @@ class OfflineSyncEngine internal constructor(
                 return@withLock SyncOutcome.NotAuthenticated
             }
 
-            val pending = queue.pending()
+            val pending = pendingProvider()
             if (pending.isEmpty()) {
                 return@withLock SyncOutcome.NothingToSync
             }
@@ -84,11 +86,11 @@ class OfflineSyncEngine internal constructor(
                 val failed = response.failedResults(sentIds)
                 totalFailed += failed.size
 
-                // Si el servidor no confirmó ninguna mutación del lote, detenemos para reintentar
-                // con backoff en vez de avanzar sobre lotes posteriores que podrían depender de este.
-                if (syncedIds.isEmpty()) {
+                // Si cualquier mutación del lote quedó sin confirmar, conservamos las ya marcadas
+                // y devolvemos RetryLater antes de avanzar a lotes posteriores.
+                if (syncedIds.size < sentIds.size) {
                     val detail = failed.firstOrNull()?.error
-                        ?: "El servidor no confirmó ninguna mutación del lote."
+                        ?: "El servidor no confirmó todas las mutaciones del lote."
                     return@withLock SyncOutcome.RetryLater(reason = detail)
                 }
             }

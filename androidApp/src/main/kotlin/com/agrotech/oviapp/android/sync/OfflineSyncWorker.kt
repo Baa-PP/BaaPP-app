@@ -56,12 +56,13 @@ class OfflineSyncWorker(
         }
 
         /**
-         * Programa sincronización automática al reconectar sin reemplazar un trabajo ya encolado.
+         * Programa sincronización automática al reconectar; si ya hay una ejecución en curso,
+         * encadena una siguiente para incluir mutaciones confirmadas después del snapshot actual.
          */
         fun enqueueOnReconnect(context: Context) {
             WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
                 UNIQUE_NAME,
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
                 buildWorkRequest(),
             )
         }

@@ -15,6 +15,8 @@ import com.agrotech.oviapp.sync.PendingSyncQueue
 import com.agrotech.oviapp.sync.SyncOutcome
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -23,6 +25,7 @@ import kotlinx.coroutines.withContext
  */
 object OfflineSyncDependencies {
     private val lock = Any()
+    private val syncGate = Mutex()
 
     @Volatile
     private var cachedSessionStorage: SessionStorage? = null
@@ -65,11 +68,15 @@ object OfflineSyncDependencies {
             }
         }
 
+    private fun activeAccountId(context: Context): String? =
+        sessionStorage(context).getSession()?.username?.takeIf { it.isNotBlank() }
+
     fun hasActiveSession(context: Context): Boolean =
-        !sessionStorage(context).getSession()?.accessToken.isNullOrBlank()
+        !sessionStorage(context).getSession()?.accessToken.isNullOrBlank() &&
+            activeAccountId(context) != null
 
     fun pendingCount(context: Context): Long =
-        PendingSyncQueue(database(context)).pendingCount()
+        PendingSyncQueue(database(context)).pendingCountForAccount(activeAccountId(context))
 
     fun engine(context: Context): OfflineSyncEngine {
         val appContext = context.applicationContext
@@ -80,12 +87,18 @@ object OfflineSyncDependencies {
             baseUrl = apiBaseUrl,
             accessToken = { storage.getSession()?.accessToken },
         )
-        return OfflineSyncEngine(queue = queue, api = api)
+        return OfflineSyncEngine(
+            queue = queue,
+            api = api,
+            pendingProvider = { queue.pendingForAccount(activeAccountId(appContext)) },
+        )
     }
 
-    suspend fun syncNow(context: Context): SyncOutcome = withContext(Dispatchers.IO) {
-        val appContext = context.applicationContext
-        engine(appContext).syncPending(isAuthenticated = { hasActiveSession(appContext) })
+    suspend fun syncNow(context: Context): SyncOutcome = syncGate.withLock {
+        withContext(Dispatchers.IO) {
+            val appContext = context.applicationContext
+            engine(appContext).syncPending(isAuthenticated = { hasActiveSession(appContext) })
+        }
     }
 
     fun resetSessionCache() {

@@ -142,4 +142,55 @@ class OfflineSyncEngineTest {
         assertEquals(SyncOutcome.NotAuthenticated, engine.syncPending(isAuthenticated = { false }))
         assertTrue(!called)
     }
+
+    @Test
+    fun partialChunkConfirmationRetainsSyncedMarksAndReturnsRetryLaterBeforeNextChunk() = runTest {
+        val m1 = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, """{"id":"a1"}""") {}
+        val m2 = queue.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, """{"id":"a2"}""") {}
+        val m3 = queue.writeAndEnqueue(SyncEntityType.WEIGHT_MEASUREMENT, SyncOperation.CREATE, """{"id":"w1"}""") {}
+
+        var callCount = 0
+        val api = KtorSyncBatchApi(
+            httpClient = HttpClient(MockEngine {
+                callCount += 1
+                respond(
+                    content = """
+                        {
+                          "results": [
+                            {"mutation_id": "${m1.mutationId}", "status": "APPLIED"},
+                            {"mutation_id": "${m2.mutationId}", "status": "FAILED", "error": "transient"}
+                          ]
+                        }
+                    """.trimIndent(),
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
+            }),
+            baseUrl = "https://api.baapp.mx",
+            accessToken = { "jwt-token" },
+        )
+
+        val engine = OfflineSyncEngine(queue = queue, api = api, batchSize = 2)
+        val outcome = engine.syncPending()
+
+        assertIs<SyncOutcome.RetryLater>(outcome)
+        assertEquals(1, callCount, "No debe avanzar al segundo lote si el primero tuvo un fallo")
+        assertEquals(listOf(m2.mutationId, m3.mutationId), queue.pending().map { it.mutationId })
+    }
+
+    @Test
+    fun pendingForAccountExcludesNullOwnerAndOtherAccounts() {
+        val qAlice = PendingSyncQueue(database, nowMillis = { nowMillis }, currentAccountId = { "alice" })
+        val qBob = PendingSyncQueue(database, nowMillis = { nowMillis }, currentAccountId = { "bob" })
+        val qAnon = PendingSyncQueue(database, nowMillis = { nowMillis }, currentAccountId = { null })
+
+        val a1 = qAlice.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+        qBob.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+        qAnon.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.CREATE, "{}") {}
+
+        assertEquals(listOf(a1.mutationId), queue.pendingForAccount("alice").map { it.mutationId })
+        assertEquals(1L, queue.pendingCountForAccount("alice"))
+        assertEquals(emptyList(), queue.pendingForAccount(null))
+        assertEquals(0L, queue.pendingCountForAccount(null))
+    }
 }

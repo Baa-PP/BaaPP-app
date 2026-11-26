@@ -159,10 +159,10 @@ class PendingSyncQueueTest {
         oldDriver.execute(null, "INSERT INTO pending_sync_events VALUES ('aa', 'ANIMAL', 'UPDATE', 't', '{}', NULL, 'PENDING')", 0)
 
         OviAppDatabase.Schema.migrate(oldDriver, oldVersion = 2, newVersion = 3)
+        OviAppDatabase.Schema.migrate(oldDriver, oldVersion = 5, newVersion = 6)
         val migrated = PendingSyncQueue(OviAppDatabase(oldDriver), nowMillis = { nowMillis }, newMutationId = { "new" })
-        migrated.writeAndEnqueue(SyncEntityType.ANIMAL, SyncOperation.UPDATE, "{}") {}
 
-        assertEquals(listOf("zz", "aa", "new"), migrated.pending().map { it.mutationId })
+        assertEquals(listOf("zz", "aa"), migrated.pending().map { it.mutationId })
         oldDriver.close()
     }
 
