@@ -1,0 +1,4 @@
+ALTER TABLE pending_sync_events ADD COLUMN account_id TEXT;
+
+CREATE INDEX idx_pending_sync_events_account_status_sequence
+    ON pending_sync_events (account_id, sync_status, sequence);

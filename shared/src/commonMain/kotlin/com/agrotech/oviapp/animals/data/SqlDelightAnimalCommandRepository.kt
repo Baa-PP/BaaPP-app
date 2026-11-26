@@ -67,6 +67,8 @@ class SqlDelightAnimalCommandRepository(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val syncQueue = PendingSyncQueue(database = database, nowMillis = clockMillis)
 
+    private class SessionChangedDuringSaveException : Exception()
+
     override suspend fun saveAnimalOffline(formState: AnimalFormState): AnimalSaveResult = withContext(ioDispatcher) {
         val validationError = formState.validate()
         if (validationError != null) {
@@ -75,7 +77,13 @@ class SqlDelightAnimalCommandRepository(
 
         val isEdit = !formState.id.isNullOrBlank()
         val activeSession = sessionStorage?.getSession()
+        val capturedAccountId = activeSession?.username?.takeIf { it.isNotBlank() }
         if (sessionStorage != null) {
+            if (capturedAccountId == null) {
+                return@withContext AnimalSaveResult.ValidationError(
+                    "No hay una cuenta activa para registrar el cambio."
+                )
+            }
             val capabilities = activeSession?.let(RanchAccessPolicy::resolveCapabilities)
             val allowed = if (isEdit) capabilities?.canEditGeneralRecords == true else capabilities?.canCapture == true
             if (!allowed) {
@@ -194,7 +202,11 @@ class SqlDelightAnimalCommandRepository(
                         operation = SyncOperation.UPDATE,
                         payloadJson = json.encodeToString(payload),
                         localPhotoPath = formState.localPhotoPath,
+                        accountId = capturedAccountId,
                     ) {
+                        if (sessionStorage != null && sessionStorage.getSession()?.username != capturedAccountId) {
+                            throw SessionChangedDuringSaveException()
+                        }
                         queries.updateAnimalFormFields(
                             ranch_id = targetRanchId,
                             folio_interno = targetFolio,
@@ -251,7 +263,11 @@ class SqlDelightAnimalCommandRepository(
                         operation = SyncOperation.CREATE,
                         payloadJson = json.encodeToString(payload),
                         localPhotoPath = formState.localPhotoPath,
+                        accountId = capturedAccountId,
                     ) {
+                        if (sessionStorage != null && sessionStorage.getSession()?.username != capturedAccountId) {
+                            throw SessionChangedDuringSaveException()
+                        }
                         queries.insertAnimal(
                             id = animalId,
                             ranch_id = targetRanchId,
@@ -287,6 +303,8 @@ class SqlDelightAnimalCommandRepository(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (_: SessionChangedDuringSaveException) {
+            AnimalSaveResult.ValidationError("La sesión cambió durante el guardado.")
         } catch (e: Exception) {
             val msg = e.message.orEmpty()
             if (msg.contains("UNIQUE", ignoreCase = true) &&

@@ -69,12 +69,26 @@ fun HomeScreen(
     onOpenBirthEventClick: () -> Unit = {},
     onOpenSavedBirthsClick: () -> Unit = {},
     loadSummary: (suspend (ranchId: String) -> RanchSummary)? = null,
+    pendingSyncCount: Long = 0L,
+    unownedPendingSyncCount: Long = 0L,
+    isSyncing: Boolean = false,
+    syncFeedback: String? = null,
+    onSyncFeedbackShown: () -> Unit = {},
+    onSyncNowClick: () -> Unit = {},
+    onClaimUnownedPendingClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val capabilities = remember(session) { session.uiCapabilities() }
+
+    LaunchedEffect(syncFeedback) {
+        val message = syncFeedback ?: return@LaunchedEffect
+        snackbarHostState.currentSnackbarData?.dismiss()
+        snackbarHostState.showSnackbar(message)
+        onSyncFeedbackShown()
+    }
 
     val showUpcomingNotice: (String) -> Unit = { message ->
         scope.launch {
@@ -182,6 +196,49 @@ fun HomeScreen(
                             PermissionBadge("Captura", session.hasPermission(RanchPermission.CAPTURA))
                             PermissionBadge("Edición", session.hasPermission(RanchPermission.EDICION))
                             PermissionBadge("Exportación", session.hasPermission(RanchPermission.EXPORTACION))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (pendingSyncCount == 0L) {
+                            "Sincronización: Todo sincronizado"
+                        } else {
+                            "Sincronización: $pendingSyncCount cambio(s) pendiente(s)"
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            color = BaappPrimaryGreen
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onSyncNowClick,
+                        enabled = !isSyncing,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 56.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = BaappPrimaryGreen)
+                    ) {
+                        Text(if (isSyncing) "Sincronizando..." else "Sincronizar ahora")
+                    }
+
+                    if (unownedPendingSyncCount > 0L) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        InfoNoticeBanner(
+                            "Hay $unownedPendingSyncCount captura(s) previa(s) sin cuenta asignada. Asígnalas a tu cuenta actual para sincronizarlas."
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = onClaimUnownedPendingClick,
+                            enabled = !isSyncing,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 56.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Asignar a mi cuenta y sincronizar")
                         }
                     }
                 }

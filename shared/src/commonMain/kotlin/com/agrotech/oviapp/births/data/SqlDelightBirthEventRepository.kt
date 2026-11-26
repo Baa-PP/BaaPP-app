@@ -1,5 +1,6 @@
 package com.agrotech.oviapp.births.data
 
+import com.agrotech.oviapp.auth.domain.SessionStorage
 import com.agrotech.oviapp.births.domain.model.BirthEventDraft
 import com.agrotech.oviapp.births.domain.model.BirthSaveResult
 import com.agrotech.oviapp.births.domain.model.SavedBirthEvent
@@ -30,11 +31,14 @@ class SqlDelightBirthEventRepository(
     private val database: OviAppDatabase,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val clockMillis: () -> Long = ::currentEpochMillis,
-    private val photoExistsCheck: (String) -> Boolean = LocalPhotoFileOps::exists
+    private val photoExistsCheck: (String) -> Boolean = LocalPhotoFileOps::exists,
+    private val sessionStorage: SessionStorage? = null,
 ) : BirthEventRepository {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val syncQueue = PendingSyncQueue(database = database, nowMillis = clockMillis)
+
+    private class SessionChangedDuringSaveException : Exception()
 
     override suspend fun saveBirthEventOffline(
         draft: BirthEventDraft,
@@ -44,6 +48,12 @@ class SqlDelightBirthEventRepository(
         val validationError = draft.validate(todayDateIso)
         if (validationError != null) {
             return@withContext BirthSaveResult.ValidationError(validationError)
+        }
+        val capturedAccountId = sessionStorage?.getSession()?.username?.takeIf { it.isNotBlank() }
+        if (sessionStorage != null && capturedAccountId == null) {
+            return@withContext BirthSaveResult.ValidationError(
+                "No hay una cuenta activa para registrar el parto."
+            )
         }
 
         val cleanPhotoPath = draft.localPhotoPath?.trim()
@@ -176,7 +186,11 @@ class SqlDelightBirthEventRepository(
                     operation = SyncOperation.CREATE,
                     payloadJson = json.encodeToString(syncPayload),
                     localPhotoPath = persistedPhotoPath,
+                    accountId = capturedAccountId,
                 ) {
+                    if (sessionStorage != null && sessionStorage.getSession()?.username != capturedAccountId) {
+                        throw SessionChangedDuringSaveException()
+                    }
                     for (lamb in preparedLambs) {
                         queries.insertAnimal(
                             id = lamb.childId,
@@ -258,6 +272,8 @@ class SqlDelightBirthEventRepository(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (_: SessionChangedDuringSaveException) {
+            BirthSaveResult.ValidationError("La sesión cambió durante el guardado.")
         } catch (e: Exception) {
             BirthSaveResult.Error(e.message ?: "Error guardando el evento de parto.")
         }

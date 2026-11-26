@@ -141,7 +141,8 @@ class SqlDelightAnimalInventoryGenealogyTest {
             operation = "CREATE",
             occurred_at = "2026-11-22T10:00:00Z",
             payload_json = """{"id":"$animalId","folioInterno":"FOTO-01"}""",
-            local_photo_path = "/data/user/0/app/files/pending_animal_photos/first.jpg"
+            local_photo_path = "/data/user/0/app/files/pending_animal_photos/first.jpg",
+            account_id = null
         )
         database.oviAppDatabaseQueries.insertSyncEvent(
             mutation_id = UuidV7.generate(),
@@ -149,7 +150,8 @@ class SqlDelightAnimalInventoryGenealogyTest {
             operation = "UPDATE",
             occurred_at = "2026-11-22T12:00:00Z",
             payload_json = """{"animalId":"$animalId","folioInterno":"FOTO-01"}""",
-            local_photo_path = "/data/user/0/app/files/pending_animal_photos/latest.jpg"
+            local_photo_path = "/data/user/0/app/files/pending_animal_photos/latest.jpg",
+            account_id = null
         )
 
         val detail = repository.getAnimalGenealogy(animalId)
@@ -163,7 +165,8 @@ class SqlDelightAnimalInventoryGenealogyTest {
             operation = "UPDATE",
             occurred_at = "2026-11-22T14:00:00Z",
             payload_json = """{"animalId":"$animalId","folioInterno":"FOTO-01"}""",
-            local_photo_path = null
+            local_photo_path = null,
+            account_id = null
         )
         val removedDetail = repository.getAnimalGenealogy(animalId)
         assertNotNull(removedDetail)

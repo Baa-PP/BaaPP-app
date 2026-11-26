@@ -27,6 +27,7 @@ class PendingSyncQueue(
     private val database: OviAppDatabase,
     private val nowMillis: () -> Long = ::currentTimeMillis,
     private val newMutationId: () -> String = { UuidV7.generate(nowMillis()) },
+    private val currentAccountId: () -> String? = { null },
 ) {
     private val queries get() = database.oviAppDatabaseQueries
 
@@ -35,10 +36,11 @@ class PendingSyncQueue(
         operation: SyncOperation,
         payloadJson: String,
         localPhotoPath: String? = null,
+        accountId: String? = currentAccountId(),
         write: () -> Unit,
     ): PendingMutation = database.transactionWithResult {
         write()
-        enqueue(entityType, operation, payloadJson, localPhotoPath)
+        enqueue(entityType, operation, payloadJson, localPhotoPath, accountId)
     }
 
     /**
@@ -51,9 +53,10 @@ class PendingSyncQueue(
         operation: SyncOperation,
         payloadJson: String,
         localPhotoPath: String? = null,
+        accountId: String? = currentAccountId(),
         write: () -> Long,
     ): PendingMutation? = database.transactionWithResult {
-        if (write() == 0L) null else enqueue(entityType, operation, payloadJson, localPhotoPath)
+        if (write() == 0L) null else enqueue(entityType, operation, payloadJson, localPhotoPath, accountId)
     }
 
     /**
@@ -67,6 +70,7 @@ class PendingSyncQueue(
         operation: SyncOperation,
         payloadJson: String,
         localPhotoPath: String?,
+        accountId: String?,
     ): PendingMutation {
         val mutation = PendingMutation(
             mutationId = newMutationId(),
@@ -83,6 +87,7 @@ class PendingSyncQueue(
             occurred_at = mutation.occurredAt,
             payload_json = mutation.payloadJson,
             local_photo_path = mutation.localPhotoPath,
+            account_id = accountId?.takeIf { it.isNotBlank() },
         )
         return mutation
     }
@@ -100,7 +105,43 @@ class PendingSyncQueue(
             )
         }
 
+    /** Mutaciones PENDING de la cuenta activa; filas sin dueño o de otra cuenta nunca se suben. */
+    fun pendingForAccount(accountId: String?): List<PendingMutation> {
+        val owner = accountId?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return queries.selectPendingSyncEventsByAccount(owner).executeAsList().map {
+            PendingMutation(
+                mutationId = it.mutation_id,
+                entityType = SyncEntityType.valueOf(it.entity_type),
+                operation = SyncOperation.valueOf(it.operation),
+                occurredAt = it.occurred_at,
+                payloadJson = it.payload_json,
+                localPhotoPath = it.local_photo_path,
+            )
+        }
+    }
+
     fun pendingCount(): Long = queries.countPendingSyncEvents().executeAsOne()
+
+    fun pendingCountForAccount(accountId: String?): Long {
+        val owner = accountId?.takeIf { it.isNotBlank() } ?: return 0L
+        return queries.countPendingSyncEventsByAccount(owner).executeAsOne()
+    }
+
+    fun unownedPendingCount(): Long =
+        queries.countUnownedPendingSyncEvents().executeAsOne()
+
+    /**
+     * Acción explícita de recuperación para capturas previas a la migración (account_id NULL).
+     * Nunca se llama automáticamente en login.
+     */
+    fun claimUnownedPendingForAccount(accountId: String): Long {
+        val owner = accountId.trim()
+        require(owner.isNotEmpty()) { "accountId no puede estar vacío" }
+        return database.transactionWithResult {
+            queries.claimUnownedPendingSyncEvents(owner)
+            changedRows()
+        }
+    }
 
     fun markSynced(mutationIds: Collection<String>) {
         database.transaction {
