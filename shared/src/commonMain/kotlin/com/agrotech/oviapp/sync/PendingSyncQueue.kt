@@ -36,10 +36,11 @@ class PendingSyncQueue(
         operation: SyncOperation,
         payloadJson: String,
         localPhotoPath: String? = null,
+        accountId: String? = currentAccountId(),
         write: () -> Unit,
     ): PendingMutation = database.transactionWithResult {
         write()
-        enqueue(entityType, operation, payloadJson, localPhotoPath)
+        enqueue(entityType, operation, payloadJson, localPhotoPath, accountId)
     }
 
     /**
@@ -52,9 +53,10 @@ class PendingSyncQueue(
         operation: SyncOperation,
         payloadJson: String,
         localPhotoPath: String? = null,
+        accountId: String? = currentAccountId(),
         write: () -> Long,
     ): PendingMutation? = database.transactionWithResult {
-        if (write() == 0L) null else enqueue(entityType, operation, payloadJson, localPhotoPath)
+        if (write() == 0L) null else enqueue(entityType, operation, payloadJson, localPhotoPath, accountId)
     }
 
     /**
@@ -68,6 +70,7 @@ class PendingSyncQueue(
         operation: SyncOperation,
         payloadJson: String,
         localPhotoPath: String?,
+        accountId: String?,
     ): PendingMutation {
         val mutation = PendingMutation(
             mutationId = newMutationId(),
@@ -84,7 +87,7 @@ class PendingSyncQueue(
             occurred_at = mutation.occurredAt,
             payload_json = mutation.payloadJson,
             local_photo_path = mutation.localPhotoPath,
-            account_id = currentAccountId()?.takeIf { it.isNotBlank() },
+            account_id = accountId?.takeIf { it.isNotBlank() },
         )
         return mutation
     }

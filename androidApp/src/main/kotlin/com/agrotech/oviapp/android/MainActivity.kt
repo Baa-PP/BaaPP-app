@@ -275,9 +275,7 @@ class MainAppViewModel(
         val accountId = currentSession?.username?.takeIf { it.isNotBlank() } ?: return
         val context = getApplication<Application>()
         viewModelScope.launch {
-            val claimed = withContext(Dispatchers.IO) {
-                OfflineSyncDependencies.claimUnownedPendingForActiveAccount(context)
-            }
+            val claimed = OfflineSyncDependencies.claimUnownedPendingForAccount(context, accountId)
             if (currentSession?.username == accountId) {
                 refreshPendingSyncCount()
                 if (claimed > 0L) {

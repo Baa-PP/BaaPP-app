@@ -81,10 +81,16 @@ object OfflineSyncDependencies {
     fun unownedPendingCount(context: Context): Long =
         PendingSyncQueue(database(context)).unownedPendingCount()
 
-    fun claimUnownedPendingForActiveAccount(context: Context): Long {
-        val accountId = activeAccountId(context) ?: return 0L
-        return PendingSyncQueue(database(context)).claimUnownedPendingForAccount(accountId)
-    }
+    suspend fun claimUnownedPendingForAccount(context: Context, expectedAccountId: String): Long =
+        syncGate.withLock {
+            withContext(Dispatchers.IO) {
+                val appContext = context.applicationContext
+                if (activeAccountId(appContext) != expectedAccountId) {
+                    return@withContext 0L
+                }
+                PendingSyncQueue(database(appContext)).claimUnownedPendingForAccount(expectedAccountId)
+            }
+        }
 
     fun engine(context: Context): OfflineSyncEngine {
         val appContext = context.applicationContext
@@ -102,7 +108,7 @@ object OfflineSyncDependencies {
             accessToken = {
                 val session = storage.getSession()
                 val currentAccount = session?.username?.takeIf { it.isNotBlank() }
-                if (expectedAccount != null && currentAccount == expectedAccount) {
+                if (session != null && expectedAccount != null && currentAccount == expectedAccount) {
                     session.accessToken
                 } else {
                     null
